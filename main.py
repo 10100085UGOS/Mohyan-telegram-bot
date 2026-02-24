@@ -92,15 +92,36 @@ WELCOME_MSG = """
 👑 *Owner:* @EVEL_DEAD0751
 """
 
-# ==================== CRYPTO PRICE FUNCTION ====================
-def get_crypto_price(coin_id, currency='usd'):
-    """CoinGecko API se coin ka current price fetch karta hai"""
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies={currency}"
+# ==================== CRYPTO PRICE FUNCTION (BINANCE API) ====================
+def get_crypto_price(coin_name):
+    """Binance API se coin ka current price fetch karta hai - 100% working"""
+    
+    # Coin name to Binance symbol mapping
+    symbol_map = {
+        'bitcoin': 'BTCUSDT',
+        'btc': 'BTCUSDT',
+        'ethereum': 'ETHUSDT',
+        'eth': 'ETHUSDT',
+        'dogecoin': 'DOGEUSDT',
+        'doge': 'DOGEUSDT'
+    }
+    
+    symbol = symbol_map.get(coin_name.lower())
+    if not symbol:
+        return None
+    
+    url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+    
     try:
         response = requests.get(url, timeout=5)
-        data = response.json()
-        return data[coin_id][currency]
-    except:
+        if response.status_code == 200:
+            data = response.json()
+            price = float(data['price'])
+            return price
+        else:
+            return None
+    except Exception as e:
+        print(f"Binance API error: {e}")
         return None
 
 # ==================== CHECK PREMIUM ====================
@@ -151,50 +172,42 @@ def start_cmd(message):
 # ==================== CRYPTO COMMANDS ====================
 @bot.message_handler(commands=['btc', 'bitcoin'])
 def btc_price(message):
-    price = get_crypto_price('bitcoin')
+    price = get_crypto_price('btc')
     if price:
         bot.reply_to(message, f"₿ *Bitcoin* price: `${price:,.2f} USD`", parse_mode="Markdown")
     else:
-        bot.reply_to(message, "❌ Price fetch karne mein error hua. Baad mein try karo.")
+        bot.reply_to(message, "❌ Price fetch karne mein error hua. Binance API try kar raha hai, baad mein phir try karo.")
 
 @bot.message_handler(commands=['eth', 'ethereum'])
 def eth_price(message):
-    price = get_crypto_price('ethereum')
+    price = get_crypto_price('eth')
     if price:
         bot.reply_to(message, f"⟠ *Ethereum* price: `${price:,.2f} USD`", parse_mode="Markdown")
     else:
-        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
+        bot.reply_to(message, "❌ Price fetch karne mein error hua. Binance API try kar raha hai, baad mein phir try karo.")
 
 @bot.message_handler(commands=['doge', 'dogecoin'])
 def doge_price(message):
-    price = get_crypto_price('dogecoin')
+    price = get_crypto_price('doge')
     if price:
         bot.reply_to(message, f"🐕 *Dogecoin* price: `${price:,.2f} USD`", parse_mode="Markdown")
     else:
-        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
+        bot.reply_to(message, "❌ Price fetch karne mein error hua. Binance API try kar raha hai, baad mein phir try karo.")
 
 @bot.message_handler(commands=['price'])
 def price_command(message):
     # /price <coin_name>
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "Usage: /price <coin_name> (e.g., /price bitcoin)")
+        bot.reply_to(message, "Usage: /price <coin_name> (e.g., /price btc, /price eth, /price doge)")
         return
     coin = args[1].lower()
-    coin_map = {
-        'btc': 'bitcoin', 'bitcoin': 'bitcoin',
-        'eth': 'ethereum', 'ethereum': 'ethereum',
-        'doge': 'dogecoin', 'dogecoin': 'dogecoin'
-    }
-    coin_id = coin_map.get(coin)
-    if not coin_id:
-        bot.reply_to(message, "❌ Unsupported coin. Try: btc, eth, doge")
-        return
-    price = get_crypto_price(coin_id)
+    
+    price = get_crypto_price(coin)
     if price:
         bot.reply_to(message, f"{coin.upper()} price: `${price:,.2f} USD`", parse_mode="Markdown")
     else:
-        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
+        bot.reply_to(message, "❌ Unsupported coin. Try: btc, eth, doge")
 
 # Crypto button handlers
 @bot.message_handler(func=lambda m: m.text == "💰 BTC Price")
