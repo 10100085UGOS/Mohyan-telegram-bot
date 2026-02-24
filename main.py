@@ -59,7 +59,7 @@ def init_db():
     conn.close()
     print("✅ Database ready")
 
-# ==================== BASE URL (Render automatically set karega) ====================
+# ==================== BASE URL ====================
 BASE_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://mohyan-telegram-bot.onrender.com')
 
 # ==================== WELCOME MESSAGE ====================
@@ -505,11 +505,14 @@ def run_bot():
     bot.remove_webhook()
     # Set webhook
     webhook_url = f"{BASE_URL}/webhook"
-    bot.set_webhook(url=webhook_url)
-    print(f"✅ Webhook set to {webhook_url}")
+    result = bot.set_webhook(url=webhook_url)
+    if result:
+        print(f"✅ Webhook set to {webhook_url}")
+    else:
+        print("❌ Webhook failed to set")
 
 if __name__ == "__main__":
-    # Run bot setup in a thread (just to set webhook once)
+    # Run bot setup in a thread
     threading.Thread(target=run_bot, daemon=True).start()
     # Start Flask server
     port = int(os.environ.get('PORT', 8080))
