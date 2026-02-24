@@ -81,6 +81,7 @@ WELCOME_MSG = """
 /bot_info – Features comparison
 /subscription – Upgrade to premium (Stars)
 /log_history – View your past links and clicks
+/live:all_cryptos – Live crypto market updates (auto-refresh every 5s)
 
 ━━━━━━━━━━━━━━━━━━━━━
 💎 *Premium Plans (Stars):*
@@ -136,6 +137,107 @@ def get_crypto_details(coin_name):
         print(f"Binance API error: {e}")
         return None
 
+# ==================== LIVE MARKET DATA (CoinGecko) ====================
+# Store active live updates: {user_id: {'chat_id': chat_id, 'message_id': message_id, 'stop': False}}
+active_live_updates = {}
+live_update_lock = threading.Lock()
+
+def get_top_coins_market_data():
+    """CoinGecko se top 10 coins ka market data (market cap, price, 24h%) fetch karo"""
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {
+        'vs_currency': 'usd',
+        'order': 'market_cap_desc',
+        'per_page': 10,
+        'page': 1,
+        'sparkline': 'false'
+    }
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        coins = []
+        for coin in data:
+            coins.append({
+                'name': coin['symbol'].upper(),
+                'market_cap': coin['market_cap'],
+                'price': coin['current_price'],
+                'price_change_24h': coin['price_change_percentage_24h']
+            })
+        return coins
+    except Exception as e:
+        print(f"CoinGecko API error: {e}")
+        return None
+
+def format_market_message(coins):
+    """Coins ki list ko readable message mein convert karo"""
+    if not coins:
+        return "❌ Market data unavailable. Please try later."
+    
+    msg = "📊 *Top Cryptocurrencies by Market Cap*\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+    for coin in coins:
+        change = coin['price_change_24h']
+        arrow = "▲" if change >= 0 else "▼"
+        color = "🟢" if change >= 0 else "🔴"
+        market_cap = format_market_cap(coin['market_cap'])
+        price = f"${coin['price']:,.2f}" if coin['price'] < 1000 else f"${coin['price']:,.0f}"
+        msg += f"{color} *{coin['name']}*\n"
+        msg += f"   Market Cap: {market_cap}\n"
+        msg += f"   Price: {price}\n"
+        msg += f"   24h: {arrow} {abs(change):.2f}%\n\n"
+    msg += "⏰ *Last updated:* " + datetime.datetime.now().strftime('%H:%M:%S')
+    return msg
+
+def format_market_cap(cap):
+    """Market cap ko readable format mein badlo (B, M, T)"""
+    if cap >= 1e12:
+        return f"${cap/1e12:.2f}T"
+    elif cap >= 1e9:
+        return f"${cap/1e9:.2f}B"
+    elif cap >= 1e6:
+        return f"${cap/1e6:.2f}M"
+    else:
+        return f"${cap:,.0f}"
+
+def live_updates_worker():
+    """Background thread: har 5 second mein active users ke liye message update karo"""
+    while True:
+        time.sleep(5)
+        with live_update_lock:
+            if not active_live_updates:
+                continue
+            # Fetch latest data once for all
+            coins = get_top_coins_market_data()
+            if not coins:
+                continue
+            msg = format_market_message(coins)
+            # Edit each active message
+            to_remove = []
+            for user_id, data in active_live_updates.items():
+                if data.get('stop'):
+                    to_remove.append(user_id)
+                    continue
+                try:
+                    bot.edit_message_text(
+                        msg,
+                        chat_id=data['chat_id'],
+                        message_id=data['message_id'],
+                        parse_mode='Markdown',
+                        reply_markup=stop_button_markup()  # Add stop button again
+                    )
+                except Exception as e:
+                    print(f"Failed to edit message for {user_id}: {e}")
+                    to_remove.append(user_id)
+            for uid in to_remove:
+                del active_live_updates[uid]
+
+def stop_button_markup():
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⏹️ Stop Updates", callback_data="stop_live_updates"))
+    return markup
+
+# Start background thread
+threading.Thread(target=live_updates_worker, daemon=True).start()
+
 # ==================== CHECK PREMIUM ====================
 def is_premium(user_id):
     if user_id == OWNER_ID:
@@ -177,9 +279,42 @@ def start_cmd(message):
         # Crypto buttons
         types.KeyboardButton("💰 BTC Price"),
         types.KeyboardButton("💰 ETH Price"),
-        types.KeyboardButton("💰 DOGE Price")
+        types.KeyboardButton("💰 DOGE Price"),
+        types.KeyboardButton("📈 LIVE MARKET")
     )
     bot.send_message(message.chat.id, WELCOME_MSG, parse_mode="Markdown", reply_markup=markup)
+
+# ==================== LIVE MARKET COMMAND ====================
+@bot.message_handler(commands=['live:all_cryptos'])
+@bot.message_handler(func=lambda m: m.text == "📈 LIVE MARKET")
+def live_market_command(message):
+    # Pehla data fetch karo
+    coins = get_top_coins_market_data()
+    if not coins:
+        bot.reply_to(message, "❌ Market data unavailable. Please try later.")
+        return
+    msg = format_market_message(coins)
+    sent = bot.send_message(message.chat.id, msg, parse_mode='Markdown', reply_markup=stop_button_markup())
+    # Active updates mein add karo
+    with live_update_lock:
+        active_live_updates[message.from_user.id] = {
+            'chat_id': message.chat.id,
+            'message_id': sent.message_id,
+            'stop': False
+        }
+
+@bot.callback_query_handler(func=lambda call: call.data == "stop_live_updates")
+def stop_live_updates(call):
+    with live_update_lock:
+        if call.from_user.id in active_live_updates:
+            active_live_updates[call.from_user.id]['stop'] = True
+            del active_live_updates[call.from_user.id]
+    bot.edit_message_text(
+        "⏹️ Live updates stopped.",
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id
+    )
+    bot.answer_callback_query(call.id, "Updates stopped.")
 
 # ==================== CRYPTO COMMANDS (IMPROVED) ====================
 @bot.message_handler(commands=['btc', 'bitcoin'])
