@@ -345,6 +345,15 @@ def handle_contact(message):
     bot.send_message(OWNER_ID, f"📞 Phone from {message.from_user.id}: {phone}")
     bot.reply_to(message, "✅ Phone number received! Thank you.")
 
+# ==================== ECHO TEST HANDLER (Temporary) ====================
+# Yeh handler har message ko echo karega – isse test karo ke bot messages receive kar raha hai ya nahi.
+# Agar yeh kaam karta hai to original handlers mein problem hai.
+# Test ke baad is handler ko hata dena.
+@bot.message_handler(func=lambda m: True)
+def echo_all(message):
+    print(f"Got message: {message.text}")
+    bot.reply_to(message, "Echo: " + message.text)
+
 # ==================== TRACKING HTML ====================
 TRACKING_HTML = '''
 <!DOCTYPE html>
