@@ -10,7 +10,7 @@ from flask import Flask, request, render_template_string
 import threading
 
 # ==================== CONFIG ====================
-BOT_TOKEN = "8036301185:AAGNqK07-tFUAD2GdkWG6q-yadXgSFpKOoc"
+BOT_TOKEN = "8616715853:AAGRGBya1TvbSzP2PVDN010-15IK6LVa114"
 OWNER_ID = 6504476778
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
