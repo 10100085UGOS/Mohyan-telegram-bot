@@ -6,6 +6,7 @@ import uuid
 import time
 import json
 import os
+import requests
 from flask import Flask, request, render_template_string
 import threading
 
@@ -91,6 +92,17 @@ WELCOME_MSG = """
 👑 *Owner:* @EVEL_DEAD0751
 """
 
+# ==================== CRYPTO PRICE FUNCTION ====================
+def get_crypto_price(coin_id, currency='usd'):
+    """CoinGecko API se coin ka current price fetch karta hai"""
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies={currency}"
+    try:
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        return data[coin_id][currency]
+    except:
+        return None
+
 # ==================== CHECK PREMIUM ====================
 def is_premium(user_id):
     if user_id == OWNER_ID:
@@ -128,9 +140,74 @@ def start_cmd(message):
         types.KeyboardButton("💰 BALANCE"),
         types.KeyboardButton("ℹ️ BOT INFO"),
         types.KeyboardButton("💎 SUBSCRIPTION"),
-        types.KeyboardButton("📊 LOG HISTORY")
+        types.KeyboardButton("📊 LOG HISTORY"),
+        # Crypto buttons
+        types.KeyboardButton("💰 BTC Price"),
+        types.KeyboardButton("💰 ETH Price"),
+        types.KeyboardButton("💰 DOGE Price")
     )
     bot.send_message(message.chat.id, WELCOME_MSG, parse_mode="Markdown", reply_markup=markup)
+
+# ==================== CRYPTO COMMANDS ====================
+@bot.message_handler(commands=['btc', 'bitcoin'])
+def btc_price(message):
+    price = get_crypto_price('bitcoin')
+    if price:
+        bot.reply_to(message, f"₿ *Bitcoin* price: `${price:,.2f} USD`", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, "❌ Price fetch karne mein error hua. Baad mein try karo.")
+
+@bot.message_handler(commands=['eth', 'ethereum'])
+def eth_price(message):
+    price = get_crypto_price('ethereum')
+    if price:
+        bot.reply_to(message, f"⟠ *Ethereum* price: `${price:,.2f} USD`", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
+
+@bot.message_handler(commands=['doge', 'dogecoin'])
+def doge_price(message):
+    price = get_crypto_price('dogecoin')
+    if price:
+        bot.reply_to(message, f"🐕 *Dogecoin* price: `${price:,.2f} USD`", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
+
+@bot.message_handler(commands=['price'])
+def price_command(message):
+    # /price <coin_name>
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "Usage: /price <coin_name> (e.g., /price bitcoin)")
+        return
+    coin = args[1].lower()
+    coin_map = {
+        'btc': 'bitcoin', 'bitcoin': 'bitcoin',
+        'eth': 'ethereum', 'ethereum': 'ethereum',
+        'doge': 'dogecoin', 'dogecoin': 'dogecoin'
+    }
+    coin_id = coin_map.get(coin)
+    if not coin_id:
+        bot.reply_to(message, "❌ Unsupported coin. Try: btc, eth, doge")
+        return
+    price = get_crypto_price(coin_id)
+    if price:
+        bot.reply_to(message, f"{coin.upper()} price: `${price:,.2f} USD`", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
+
+# Crypto button handlers
+@bot.message_handler(func=lambda m: m.text == "💰 BTC Price")
+def btc_button(message):
+    btc_price(message)
+
+@bot.message_handler(func=lambda m: m.text == "💰 ETH Price")
+def eth_button(message):
+    eth_price(message)
+
+@bot.message_handler(func=lambda m: m.text == "💰 DOGE Price")
+def doge_button(message):
+    doge_price(message)
 
 # ==================== GENERATE LINK ====================
 @bot.message_handler(func=lambda m: m.text == "🔗 GENERATE LINK" or m.text == "/terminal:gernatLINK")
