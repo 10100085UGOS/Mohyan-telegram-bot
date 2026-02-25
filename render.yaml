@@ -5,3 +5,4 @@
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     plan: free
+    pythonVersion: 3.11  # new line of version v3.0.9
