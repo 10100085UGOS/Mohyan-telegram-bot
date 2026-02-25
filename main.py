@@ -368,9 +368,9 @@ def check_expired_ads():
 
 scheduler.add_job(check_expired_ads, 'interval', minutes=1)
 
-# ==================== CHECK PREMIUM ====================
+# ==================== CHECK PREMIUM (OWNER FIRST) ====================
 def is_premium(user_id):
-    if user_id == OWNER_ID:
+    if user_id == OWNER_ID:          # Owner always premium
         return True
     conn = get_db()
     c = conn.cursor()
@@ -652,7 +652,7 @@ def price_btc_graph(message):
     bot.send_photo(message.chat.id, img, caption=caption, parse_mode="Markdown")
     bot.delete_message(loading.chat.id, loading.message_id)
 
-    # Show ad if free user
+    # Show ad if free user (owner is premium so no ad)
     if not is_premium(message.from_user.id):
         ad = get_active_ad()
         if ad:
