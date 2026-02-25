@@ -3,5 +3,4 @@ flask==3.0.0
 requests==2.31.0
 matplotlib==3.8.0
 apscheduler==3.10.4
-googletrans==4.0.0rc1
-pillow==11.2.1 
+pillow==11.2.1
