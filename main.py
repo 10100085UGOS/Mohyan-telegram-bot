@@ -1,10 +1,10 @@
- #!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Advanced Telegram Bot with Crypto Tracking, Hack Link Generator,
 ReCOIN Reward System, Premium Subscription, and Whitelist Auto-Leave.
 Developer: @EVEL_DEAD0751
-Version: 4.0
+Version: 5.0 – Final Clean
 """
 
 import telebot
@@ -38,13 +38,11 @@ app = Flask(__name__)
 DB_PATH = 'bot.db'
 
 def get_db():
-    """Return a thread-safe database connection."""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    """Create all necessary tables if they don't exist."""
     with get_db() as conn:
         c = conn.cursor()
         # Users
@@ -65,7 +63,7 @@ def init_db():
             created_at TEXT,
             clicks INTEGER DEFAULT 0
         )''')
-        # Clicks (visitor data)
+        # Clicks
         c.execute('''CREATE TABLE IF NOT EXISTS clicks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             link_id TEXT,
@@ -133,7 +131,7 @@ def init_db():
             viewed_at TIMESTAMP,
             earned INTEGER DEFAULT 0
         )''')
-        # WHITELIST for auto-leave feature
+        # Whitelist for auto-leave
         c.execute('''CREATE TABLE IF NOT EXISTS whitelist (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id INTEGER UNIQUE,
@@ -141,7 +139,7 @@ def init_db():
             chat_link TEXT,
             added_at TIMESTAMP
         )''')
-        # Processed chats (to avoid duplicate checks)
+        # Processed chats
         c.execute('''CREATE TABLE IF NOT EXISTS processed (
             chat_id INTEGER PRIMARY KEY
         )''')
@@ -151,29 +149,29 @@ def init_db():
 init_db()
 
 # =============================================================================
-# SCHEDULER (background jobs)
+# SCHEDULER
 # =============================================================================
 scheduler = BackgroundScheduler()
 scheduler.start()
 
 # =============================================================================
-# HELPER FUNCTIONS (for existing features)
+# HELPER FUNCTIONS
 # =============================================================================
-def get_binance_price(symbol: str) -> float | None:
+def get_binance_price(symbol):
     try:
         resp = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=5)
         return float(resp.json()['price'])
     except:
         return None
 
-def get_coin_supply_from_coincap(symbol: str) -> float | None:
+def get_coin_supply_from_coincap(symbol):
     try:
         resp = requests.get(f"https://api.coincap.io/v2/assets/{symbol.lower()}", timeout=5)
         return float(resp.json()['data']['supply'])
     except:
         return None
 
-def get_cached_supply(symbol: str) -> float | None:
+def get_cached_supply(symbol):
     with get_db() as conn:
         c = conn.cursor()
         c.execute("SELECT supply, last_updated FROM coins WHERE symbol=?", (symbol.upper(),))
@@ -184,14 +182,14 @@ def get_cached_supply(symbol: str) -> float | None:
                 return row[0]
     return None
 
-def update_coin_supply(symbol: str, supply: float):
+def update_coin_supply(symbol, supply):
     with get_db() as conn:
         c = conn.cursor()
         c.execute("INSERT OR REPLACE INTO coins (symbol, supply, last_updated) VALUES (?, ?, ?)",
                   (symbol.upper(), supply, datetime.datetime.now()))
         conn.commit()
 
-def get_market_data(coin_symbol: str, coin_api_name: str) -> dict | None:
+def get_market_data(coin_symbol, coin_api_name):
     binance_symbol = coin_symbol + 'USDT'
     price = get_binance_price(binance_symbol)
     if not price:
@@ -208,7 +206,7 @@ def get_market_data(coin_symbol: str, coin_api_name: str) -> dict | None:
         return None
     return {'price': price, 'market_cap': price * supply, 'supply': supply}
 
-def format_market_cap(cap: float) -> str:
+def format_market_cap(cap):
     if cap >= 1e12:
         return f"${cap/1e12:.2f}T"
     if cap >= 1e9:
@@ -217,14 +215,14 @@ def format_market_cap(cap: float) -> str:
         return f"${cap/1e6:.2f}M"
     return f"${cap:,.0f}"
 
-def format_price(price: float) -> str:
+def format_price(price):
     if price < 1:
         return f"${price:.4f}"
     if price < 1000:
         return f"${price:.2f}"
     return f"${price:,.0f}"
 
-def is_premium(user_id: int) -> bool:
+def is_premium(user_id):
     if user_id == OWNER_ID:
         return True
     with get_db() as conn:
@@ -241,7 +239,7 @@ def is_premium(user_id: int) -> bool:
                 return True
     return False
 
-def get_active_ad() -> dict | None:
+def get_active_ad():
     with get_db() as conn:
         c = conn.cursor()
         c.execute("SELECT * FROM ads WHERE is_active=1 ORDER BY created_at DESC LIMIT 1")
@@ -363,16 +361,13 @@ threading.Thread(target=live_updater, daemon=True).start()
 # =============================================================================
 # WHITELIST AUTO-LEAVE FUNCTIONS
 # =============================================================================
-def is_whitelisted(chat_id: int) -> bool:
-    """Check if a chat is in whitelist."""
+def is_whitelisted(chat_id):
     with get_db() as conn:
         c = conn.cursor()
         c.execute("SELECT * FROM whitelist WHERE chat_id=?", (chat_id,))
-        row = c.fetchone()
-    return row is not None
+        return c.fetchone() is not None
 
-def add_to_whitelist(chat_id: int, title: str, link: str) -> bool:
-    """Add a chat to whitelist."""
+def add_to_whitelist(chat_id, title, link):
     with get_db() as conn:
         c = conn.cursor()
         try:
@@ -383,69 +378,53 @@ def add_to_whitelist(chat_id: int, title: str, link: str) -> bool:
         except sqlite3.IntegrityError:
             return False
 
-def remove_from_whitelist(chat_id: int):
-    """Remove a chat from whitelist."""
+def remove_from_whitelist(chat_id):
     with get_db() as conn:
         c = conn.cursor()
         c.execute("DELETE FROM whitelist WHERE chat_id=?", (chat_id,))
         conn.commit()
 
 def get_all_whitelist():
-    """Get all whitelist entries."""
     with get_db() as conn:
         c = conn.cursor()
         c.execute("SELECT * FROM whitelist ORDER BY added_at DESC")
         return c.fetchall()
 
-def mark_processed(chat_id: int):
-    """Mark a chat as processed (to avoid duplicate checks)."""
+def mark_processed(chat_id):
     with get_db() as conn:
         c = conn.cursor()
         c.execute("INSERT OR IGNORE INTO processed (chat_id) VALUES (?)", (chat_id,))
         conn.commit()
 
-def is_processed(chat_id: int) -> bool:
-    """Check if a chat has been processed already."""
+def is_processed(chat_id):
     with get_db() as conn:
         c = conn.cursor()
         c.execute("SELECT * FROM processed WHERE chat_id=?", (chat_id,))
-        row = c.fetchone()
-    return row is not None
+        return c.fetchone() is not None
 
 # =============================================================================
-# AUTO-LEAVE CHECK (runs on every message from groups/channels)
+# AUTO-LEAVE CHECK
 # =============================================================================
 @bot.message_handler(func=lambda m: True)
 def auto_leave_check(message):
-    """Check if the chat is whitelisted; if not, leave after a short delay."""
-    # Ignore private messages
     if message.chat.type == 'private':
         return
-
     chat_id = message.chat.id
     chat_title = message.chat.title or "Unknown"
-
-    # If already processed, skip (optional – you can remove this if you want to check every time)
     if is_processed(chat_id):
         return
-
-    # Mark as processed so we don't check again for this session
     mark_processed(chat_id)
-
-    # Check whitelist
     if not is_whitelisted(chat_id):
-        # Not in whitelist → leave after a short delay
         bot.send_message(chat_id, "❌ This group/channel is not whitelisted. Leaving in 2 seconds...")
-        time.sleep(2)  # 2 second delay
+        time.sleep(2)
         try:
             bot.leave_chat(chat_id)
-            # Notify owner (optional)
             bot.send_message(OWNER_ID, f"⏏️ Left non-whitelisted chat:\n{chat_title}\nID: {chat_id}")
         except Exception as e:
             bot.send_message(OWNER_ID, f"⚠️ Failed to leave chat {chat_id}: {e}")
 
 # =============================================================================
-# BOT COMMAND HANDLERS (existing + whitelist commands)
+# BOT COMMAND HANDLERS
 # =============================================================================
 @bot.message_handler(commands=['start'])
 def cmd_start(message):
@@ -775,12 +754,10 @@ def verify_ad(call):
     uid = call.from_user.id
     with get_db() as conn:
         c = conn.cursor()
-        # Check if already verified today
         c.execute("SELECT COUNT(*) FROM ad_views WHERE user_id=? AND ad_id=? AND date(viewed_at)=date('now')", (uid, ad_id))
         if c.fetchone()[0] > 0:
             bot.answer_callback_query(call.id, "❌ Already earned today")
             return
-        # Rate limit: 30 seconds between verifications
         c.execute("SELECT viewed_at FROM ad_views WHERE user_id=? ORDER BY viewed_at DESC LIMIT 1", (uid,))
         last = c.fetchone()
         if last:
@@ -788,12 +765,10 @@ def verify_ad(call):
             if datetime.datetime.now() - last_time < datetime.timedelta(seconds=30):
                 bot.answer_callback_query(call.id, "⏳ Wait 30s")
                 return
-        # Daily limit: 10 ads
         c.execute("SELECT COUNT(*) FROM ad_views WHERE user_id=? AND date(viewed_at)=date('now')", (uid,))
         if c.fetchone()[0] >= 10:
             bot.answer_callback_query(call.id, "❌ Daily limit reached")
             return
-        # Record view
         c.execute("INSERT INTO ad_views (user_id, ad_id, viewed_at) VALUES (?,?,?)", (uid, ad_id, datetime.datetime.now()))
         c.execute("SELECT ad_view_count, recoin FROM user_coins WHERE user_id=?", (uid,))
         row = c.fetchone()
@@ -810,15 +785,7 @@ def verify_ad(call):
             c.execute("UPDATE user_coins SET ad_view_count=? WHERE user_id=?", (vc, uid))
             bot.answer_callback_query(call.id, f"✅ Verified! {2-(vc%2)} more to earn 1 ReCOIN")
         conn.commit()
-# My Edit version for webhook manually work
-# ==================== FLASK ROUTES ====================
-@app.route('/')
-def home():
-    return "✅ Bot is running!"
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    # ... existing code of manually work...
 # =============================================================================
 # OWNER ADS MANAGEMENT
 # =============================================================================
@@ -1038,17 +1005,12 @@ def process_add_whitelist(message):
     if not link.startswith('https://t.me/'):
         bot.reply_to(message, "❌ Invalid Telegram link. Must start with https://t.me/")
         return
-
-    # Extract chat username from link
     parts = link.split('/')
     username = parts[-1].replace('@', '')
-
     try:
-        # Get chat info using username
         chat = bot.get_chat(f"@{username}")
         chat_id = chat.id
         title = chat.title or "Unknown"
-
         if add_to_whitelist(chat_id, title, link):
             bot.reply_to(message, f"✅ Added to whitelist:\n**{title}**\nID: `{chat_id}`", parse_mode="Markdown")
         else:
@@ -1065,7 +1027,6 @@ def remove_whitelist_start(message):
     if not whitelist:
         bot.reply_to(message, "📭 Whitelist is empty.")
         return
-
     markup = types.InlineKeyboardMarkup(row_width=1)
     for item in whitelist:
         btn = types.InlineKeyboardButton(f"❌ {item['chat_title']}", callback_data=f"remove_{item['chat_id']}")
@@ -1081,7 +1042,6 @@ def list_whitelist(message):
     if not whitelist:
         bot.reply_to(message, "📭 Whitelist is empty.")
         return
-
     msg = "📋 *Whitelist*\n\n"
     for item in whitelist:
         msg += f"• **{item['chat_title']}**\n  ID: `{item['chat_id']}`\n  Link: {item['chat_link']}\n\n"
@@ -1204,8 +1164,12 @@ def history_cmd(message):
     bot.reply_to(message, text, parse_mode="Markdown")
 
 # =============================================================================
-# FLASK ROUTES (tracking & webhook)
+# FLASK ROUTES (tracking & webhook) – ONLY ONE COPY
 # =============================================================================
+@app.route('/')
+def home():
+    return "✅ Bot is running!"
+
 @app.route('/ad_click/<int:ad_id>')
 def ad_click(ad_id):
     with get_db() as conn:
