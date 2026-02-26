@@ -5,6 +5,11 @@ import telebot
 from flask import Flask, request
 import os
 import threading
+# aeroplane function steps { 
+import math
+import requests
+from geopy.distance import distance  # pip install geopy (add to requirements)
+
 
 # =============================================================================
 # CONFIGURATION
@@ -56,12 +61,8 @@ if __name__ == "__main__":
 # =============================================================================
 # AEROPLANE TRACKER MODULE – ADD THIS TO YOUR main.py
 # (Kahin bhi daal sakte ho, preferably BOT COMMANDS section ke baad)
-# =============================================================================
-
-import math
-import requests
-from geopy.distance import distance  # pip install geopy (add to requirements)
-
+# ============================================================================  
+  
 # -------------------- CONFIG --------------------
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
 MAP_WEBSITE = "https://your-map-site.onrender.com"  # Apna hosted map website (with ads)
