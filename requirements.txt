@@ -4,3 +4,4 @@ requests==2.31.0
 matplotlib==3.8.0
 apscheduler==3.10.4
 pillow==11.2.1
+geopy==2.4.0
