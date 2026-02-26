@@ -1,4 +1,4 @@
-import os
+wimport os
 import io
 import time
 import json
@@ -1165,13 +1165,17 @@ CREATE TABLE IF NOT EXISTS clicks (
 );
 """
 
+#@bot.message_handler(commands=['genlink', 'terminal:gernatLINK'])
+#def genlink_command(message):
+   # """Start the hack link generator"""
+   # ensure_user(message.from_user)
+   # markup = types.InlineKeyboardMarkup()
+   # markup.add(types.InlineKeyboardButton("💀 ENTER VIDEO LINK", callback_data="genlink_enter"))
 @bot.message_handler(commands=['genlink', 'terminal:gernatLINK'])
 def genlink_command(message):
-    """Start the hack link generator"""
-    ensure_user(message.from_user)
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("💀 ENTER VIDEO LINK", callback_data="genlink_enter"))
-    
+    print("🔥 genlink called")
+    bot.reply_to(message, "✅ Hack link generator test working!")
+
     danger_text = """
 ╔══════════════════════════════════╗
 ║  💀 *HACK LINK GENERATOR* 💀      ║
