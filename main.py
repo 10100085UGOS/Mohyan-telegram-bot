@@ -33,7 +33,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
 # Webhook path with token for security
-WEBHOOK_URL_PATH = f"/{BOT_TOKEN}"
+WEBHOOK_URL_PATH = "/webhook"
 
 # =============================================================================
 # 🗄️ DATABASE SETUP
