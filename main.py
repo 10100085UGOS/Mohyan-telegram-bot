@@ -1,231 +1,1129 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import telebot
-from telebot import types                    # <-- YEH IMPORT MISSING THA
-from flask import Flask, request
 import os
+import io
+import time
+import json
+import sqlite3
+import logging
 import threading
-import math
 import requests
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from datetime import datetime, timedelta
-from apscheduler.schedulers.background import BackgroundScheduler  # <-- YEH ADD KARO
+from flask import Flask, request, jsonify
+from apscheduler.schedulers.background import BackgroundScheduler
+import telebot
+from telebot import types
+from geopy.distance import geodesic
 
-# =============================================================================
+# ═══════════════════════════════════════════
 # CONFIGURATION
-# =============================================================================
-BOT_TOKEN = "8616715853:AAGRGBya1TvbSzP2PVDN010-15IK6LVa114"
-OWNER_ID = 6504476778
+# ═══════════════════════════════════════════
 
-bot = telebot.TeleBot(BOT_TOKEN)
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+OWNER_ID = int(os.environ.get("OWNER_ID", "6504476778"))
+RENDER_URL = os.environ.get("RENDER_URL", "https://your-app.onrender.com")
+PORT = int(os.environ.get("PORT", 5000))
+WEBHOOK_PATH = "/webhook"
+DB_NAME = "bot.db"
+
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 app = Flask(__name__)
 
-WEBHOOK_URL_PATH = "/webhook"
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# =============================================================================
-# SCHEDULER SETUP
-# =============================================================================
-scheduler = BackgroundScheduler()
-scheduler.start()
+# ═══════════════════════════════════════════
+# DATABASE SETUP
+# ═══════════════════════════════════════════
 
-# =============================================================================
-# BASIC COMMAND
-# =============================================================================
-@bot.message_handler(commands=['start'])
-def start_command(message):
-    bot.reply_to(message, "✅ Bot is working! Send /help for commands.")
+def get_db():
+    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-# =============================================================================
-# AEROPLANE TRACKER CONFIG
-# =============================================================================
-OPENSKY_URL = "https://opensky-network.org/api/states/all"
-FLIGHT_UPDATE_INTERVAL = 10
-FLIGHT_DURATION = 60
+def init_db():
+    conn = get_db()
+    c = conn.cursor()
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            is_premium INTEGER DEFAULT 0,
+            premium_until TEXT,
+            joined_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS user_coins (
+            user_id INTEGER PRIMARY KEY,
+            balance REAL DEFAULT 0.0
+        );
+        CREATE TABLE IF NOT EXISTS rewarded_ads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            ad_id TEXT,
+            watched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            verified INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            symbol TEXT,
+            target_price REAL,
+            direction TEXT,
+            active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS ads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            button_text TEXT,
+            link TEXT,
+            photo_id TEXT,
+            duration_hours INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            expires_at TEXT,
+            active INTEGER DEFAULT 1
+        );
+        CREATE TABLE IF NOT EXISTS ad_views (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ad_id INTEGER,
+            user_id INTEGER,
+            viewed_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS whitelist (
+            chat_id INTEGER PRIMARY KEY,
+            title TEXT,
+            added_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS processed (
+            update_id INTEGER PRIMARY KEY
+        );
+    """)
+    conn.commit()
+    conn.close()
 
-active_flight_tracking = {}
-flight_tracking_lock = threading.Lock()
+init_db()
 
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
-    c = 2 * math.asin(math.sqrt(a))
-    return R * c
+# ═══════════════════════════════════════════
+# HELPER FUNCTIONS
+# ═══════════════════════════════════════════
 
-def get_flights_in_radius(lat, lon, radius_km):
-    lat_delta = radius_km / 111.0
-    lon_delta = radius_km / (111.0 * math.cos(math.radians(lat)))
-    params = {
-        'lamin': lat - lat_delta,
-        'lamax': lat + lat_delta,
-        'lomin': lon - lon_delta,
-        'lomax': lon + lon_delta
-    }
+def ensure_user(user):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name) VALUES (?, ?, ?)",
+              (user.id, user.username, user.first_name))
+    c.execute("INSERT OR IGNORE INTO user_coins (user_id, balance) VALUES (?, 0)", (user.id,))
+    conn.commit()
+    conn.close()
+
+def is_premium(user_id):
+    conn = get_db()
+    c = conn.cursor()
+    row = c.execute("SELECT is_premium, premium_until FROM users WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
+    if not row:
+        return False
+    if row["is_premium"] and row["premium_until"]:
+        if datetime.fromisoformat(row["premium_until"]) > datetime.now():
+            return True
+        conn2 = get_db()
+        conn2.execute("UPDATE users SET is_premium=0 WHERE user_id=?", (user_id,))
+        conn2.commit()
+        conn2.close()
+    return False
+
+def get_balance(user_id):
+    conn = get_db()
+    row = conn.execute("SELECT balance FROM user_coins WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
+    return row["balance"] if row else 0.0
+
+def add_coins(user_id, amount):
+    conn = get_db()
+    conn.execute("UPDATE user_coins SET balance = balance + ? WHERE user_id=?", (amount, user_id))
+    conn.commit()
+    conn.close()
+
+def deduct_coins(user_id, amount):
+    bal = get_balance(user_id)
+    if bal >= amount:
+        conn = get_db()
+        conn.execute("UPDATE user_coins SET balance = balance - ? WHERE user_id=?", (amount, user_id))
+        conn.commit()
+        conn.close()
+        return True
+    return False
+
+def set_premium(user_id, days):
+    until = (datetime.now() + timedelta(days=days)).isoformat()
+    conn = get_db()
+    conn.execute("UPDATE users SET is_premium=1, premium_until=? WHERE user_id=?", (until, user_id))
+    conn.commit()
+    conn.close()
+
+def get_crypto_price(symbol):
     try:
-        resp = requests.get(OPENSKY_URL, params=params, timeout=10)
-        data = resp.json()
-        flights = []
-        for state in data.get('states', []):
-            if state[5] and state[6]:
-                flight_lon = state[5]
-                flight_lat = state[6]
-                dist = haversine(lat, lon, flight_lat, flight_lon)
-                if dist <= radius_km:
-                    flights.append({
-                        'callsign': state[1].strip() if state[1] else 'Unknown',
-                        'icao24': state[0],
-                        'lat': flight_lat,
-                        'lon': flight_lon,
-                        'altitude': state[7] if state[7] else 0,
-                        'velocity': state[9] if state[9] else 0,
-                        'heading': state[10] if state[10] else 0,
-                        'distance': round(dist, 1)
-                    })
-        return flights
-    except Exception as e:
-        print(f"OpenSky error: {e}")
-        return []
+        url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol.upper()}USDT"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        price = float(data["lastPrice"])
+        change = float(data["priceChangePercent"])
+        high = float(data["highPrice"])
+        low = float(data["lowPrice"])
+        volume = float(data["volume"])
+        return {"price": price, "change": change, "high": high, "low": low, "volume": volume}
+    except:
+        return None
 
-def format_flight_message(flights, lat, lon, radius_km):
-    if not flights:
-        return f"✈️ *No flights found within {radius_km}km*\n\n_Will keep checking..._"
-    msg = f"✈️ *Flights within {radius_km}km*\n━━━━━━━━━━━━━━━━━━━━━\n"
-    for f in flights[:5]:
-        msg += f"\n🛩️ *{f['callsign']}*\n"
-        msg += f"   📍 Distance: `{f['distance']} km`\n"
-        msg += f"   📈 Altitude: `{f['altitude']} m`\n"
-        msg += f"   💨 Speed: `{f['velocity']} m/s`\n"
-        if f['heading']:
-            msg += f"   🧭 Heading: `{f['heading']}°`\n"
-        msg += f"   🆔 ID: `{f['icao24']}`\n"
-    if len(flights) > 5:
-        msg += f"\n... and {len(flights)-5} more"
-    msg += "\n━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"_Updates every 10s · Auto-stops in 60s_"
-    return msg
+def get_market_cap(symbol):
+    try:
+        url = f"https://api.coincap.io/v2/assets/{symbol.lower()}"
+        r = requests.get(url, timeout=10)
+        data = r.json()["data"]
+        return float(data["marketCapUsd"])
+    except:
+        return None
 
-def flight_updater_job():
-    with flight_tracking_lock:
-        now = datetime.now()
-        expired = []
-        for user_id, data in active_flight_tracking.items():
-            if now > data['expires_at']:
-                expired.append(user_id)
-                continue
-            flights = get_flights_in_radius(data['lat'], data['lon'], data['radius_km'])
-            msg = format_flight_message(flights, data['lat'], data['lon'], data['radius_km'])
+def format_number(n):
+    if n >= 1e12:
+        return f"${n/1e12:.2f}T"
+    elif n >= 1e9:
+        return f"${n/1e9:.2f}B"
+    elif n >= 1e6:
+        return f"${n/1e6:.2f}M"
+    else:
+        return f"${n:,.2f}"
+
+CRYPTO_MAP = {
+    "btc": ("BTC", "bitcoin"),
+    "eth": ("ETH", "ethereum"),
+    "doge": ("DOGE", "dogecoin"),
+    "sol": ("SOL", "solana"),
+    "xrp": ("XRP", "xrp"),
+    "bnb": ("BNB", "binancecoin"),
+    "ada": ("ADA", "cardano"),
+    "dot": ("DOT", "polkadot"),
+    "matic": ("MATIC", "polygon"),
+    "avax": ("AVAX", "avalanche"),
+}
+
+# ═══════════════════════════════════════════
+# USER STATES
+# ═══════════════════════════════════════════
+
+user_states = {}
+live_sessions = {}
+flight_sessions = {}
+ad_creation = {}
+
+# ═══════════════════════════════════════════
+# /start COMMAND
+# ═══════════════════════════════════════════
+
+@bot.message_handler(commands=["start"])
+def start_command(message):
+    ensure_user(message.from_user)
+    text = """
+╔══════════════════════════════════╗
+║  🤖 <b>PREMIUM MULTI-FEATURE BOT</b>  ║
+╠══════════════════════════════════╣
+║                                  ║
+║  Welcome! Ye bot aapko multiple  ║
+║  features provide karta hai:     ║
+║                                  ║
+║  📊 Crypto Price Tracking        ║
+║  ✈️ Aeroplane Tracker            ║
+║  💰 ReCOIN Reward System         ║
+║  ⭐ Premium Subscription         ║
+║  📢 Ad System                    ║
+║                                  ║
+╠══════════════════════════════════╣
+║  🟢 FREE FEATURES (1-10):       ║
+║  1. /btc - Bitcoin Price         ║
+║  2. /eth - Ethereum Price        ║
+║  3. /doge - Dogecoin Price       ║
+║  4. /live - Live Market Updates  ║
+║  5. /price_btc - BTC 7D Chart   ║
+║  6. /alert - Price Alerts        ║
+║  7. /getcoin - Earn ReCOIN       ║
+║  8. /balance - Check Balance     ║
+║  9. /nearby_flight - Track ✈️    ║
+║  10. /premium - Get Premium      ║
+║                                  ║
+║  🔴 PREMIUM FEATURES (11-21):   ║
+║  11. Ad-free experience          ║
+║  12. Unlimited alerts            ║
+║  13. Faster live updates         ║
+║  14. Priority support            ║
+║  15. Extended flight range       ║
+║  16. Portfolio tracking          ║
+║  17. Custom notifications        ║
+║  18. API access                  ║
+║  19. Group management            ║
+║  20. Advanced charts             ║
+║  21. All future features         ║
+║                                  ║
+╚══════════════════════════════════╝
+"""
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📊 Crypto", callback_data="menu_crypto"),
+        types.InlineKeyboardButton("✈️ Flights", callback_data="menu_flight"),
+        types.InlineKeyboardButton("💰 ReCOIN", callback_data="menu_coin"),
+        types.InlineKeyboardButton("⭐ Premium", callback_data="menu_premium"),
+    )
+    bot.send_message(message.chat.id, text, reply_markup=markup)
+
+# ═══════════════════════════════════════════
+# CRYPTO COMMANDS
+# ═══════════════════════════════════════════
+
+@bot.message_handler(commands=["btc", "eth", "doge", "sol", "xrp", "bnb", "ada", "dot", "matic", "avax"])
+def crypto_price_command(message):
+    ensure_user(message.from_user)
+    cmd = message.text.strip("/").split("@")[0].lower()
+    if cmd not in CRYPTO_MAP:
+        bot.reply_to(message, "❌ Unknown crypto.")
+        return
+
+    symbol, cap_id = CRYPTO_MAP[cmd]
+    data = get_crypto_price(symbol)
+    if not data:
+        bot.reply_to(message, "❌ Price fetch failed. Try again.")
+        return
+
+    mcap = get_market_cap(cap_id)
+    emoji = "🟢" if data["change"] >= 0 else "🔴"
+
+    text = f"""
+╔══════════════════════════════════╗
+║  {emoji} <b>{symbol}/USDT</b> Market Data      ║
+╠══════════════════════════════════╣
+║                                  ║
+║  💰 Price: <b>${data['price']:,.4f}</b>
+║  📈 24h Change: <b>{data['change']:+.2f}%</b>
+║  🔺 24h High: ${data['high']:,.4f}
+║  🔻 24h Low: ${data['low']:,.4f}
+║  📊 Volume: {data['volume']:,.2f} {symbol}
+║  🏦 Market Cap: {format_number(mcap) if mcap else 'N/A'}
+║                                  ║
+╚══════════════════════════════════╝
+"""
+    bot.send_message(message.chat.id, text)
+
+# ═══════════════════════════════════════════
+# /live COMMAND - ALL CRYPTOS
+# ═══════════════════════════════════════════
+
+@bot.message_handler(commands=["live"])
+def live_command(message):
+    ensure_user(message.from_user)
+    uid = message.from_user.id
+    live_sessions[uid] = True
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🛑 Stop Live", callback_data="stop_live"))
+
+    msg = bot.send_message(message.chat.id, "⏳ Loading live market data...", reply_markup=markup)
+
+    def update_live():
+        count = 0
+        while live_sessions.get(uid, False) and count < 60:
+            lines = ["╔══════════════════════════════════╗",
+                      "║  📊 <b>LIVE CRYPTO MARKET</b>          ║",
+                      "╠══════════════════════════════════╣"]
+            for cmd, (sym, _) in CRYPTO_MAP.items():
+                d = get_crypto_price(sym)
+                if d:
+                    e = "🟢" if d["change"] >= 0 else "🔴"
+                    lines.append(f"║  {e} {sym}: ${d['price']:,.2f} ({d['change']:+.2f}%)")
+            lines.append(f"║\n║  🕐 Updated: {datetime.now().strftime('%H:%M:%S')}")
+            lines.append("╚══════════════════════════════════╝")
+            text = "\n".join(lines)
+
             try:
-                bot.edit_message_text(
-                    msg,
-                    chat_id=data['chat_id'],
-                    message_id=data['message_id'],
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                print(f"Edit error for {user_id}: {e}")
-        for uid in expired:
-            del active_flight_tracking[uid]
+                bot.edit_message_text(text, message.chat.id, msg.message_id, reply_markup=markup, parse_mode="HTML")
+            except:
+                pass
+            count += 1
+            time.sleep(5)
 
-# =============================================================================
-# SCHEDULER JOB ADD
-# =============================================================================
-scheduler.add_job(flight_updater_job, 'interval', seconds=FLIGHT_UPDATE_INTERVAL)
+        live_sessions.pop(uid, None)
+        try:
+            bot.edit_message_text("🛑 Live updates stopped.", message.chat.id, msg.message_id)
+        except:
+            pass
 
-# =============================================================================
-# BOT COMMAND HANDLERS
-# =============================================================================
-@bot.message_handler(commands=['nearby_flight'])
-def cmd_nearby_flight(message):
-    with flight_tracking_lock:
-        if message.from_user.id in active_flight_tracking:
-            del active_flight_tracking[message.from_user.id]
-    markup = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
-    location_btn = types.KeyboardButton("📍 Share Location", request_location=True)
-    markup.add(location_btn)
-    bot.reply_to(
-        message,
-        "📍 Please share your current location to find nearby flights.\n\n"
-        "Or you can use the button below.",
-        reply_markup=markup
+    threading.Thread(target=update_live, daemon=True).start()
+
+# ═══════════════════════════════════════════
+# /price_btc - 7 Day Chart
+# ═══════════════════════════════════════════
+
+@bot.message_handler(commands=["price_btc"])
+def btc_chart_command(message):
+    ensure_user(message.from_user)
+    bot.send_message(message.chat.id, "⏳ Generating BTC 7-day chart...")
+
+    try:
+        url = "https://api.coincap.io/v2/assets/bitcoin/history?interval=h1"
+        r = requests.get(url, timeout=15)
+        data = r.json()["data"]
+
+        now = datetime.now()
+        week_ago = now - timedelta(days=7)
+        filtered = [d for d in data if datetime.fromtimestamp(d["time"]/1000) >= week_ago]
+
+        times = [datetime.fromtimestamp(d["time"]/1000) for d in filtered]
+        prices = [float(d["priceUsd"]) for d in filtered]
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(times, prices, color="#00ff88", linewidth=2)
+        ax.fill_between(times, prices, alpha=0.15, color="#00ff88")
+        ax.set_facecolor("#0a0a1a")
+        fig.patch.set_facecolor("#0a0a1a")
+        ax.tick_params(colors="white")
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+        ax.set_title("Bitcoin 7-Day Price Chart", color="white", fontsize=14, fontweight="bold")
+        ax.set_ylabel("USD", color="white")
+        for spine in ax.spines.values():
+            spine.set_color("#333")
+        ax.grid(True, alpha=0.2, color="#444")
+        plt.tight_layout()
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=150)
+        buf.seek(0)
+        plt.close()
+
+        bot.send_photo(message.chat.id, buf, caption="📊 <b>BTC/USD - 7 Day Chart</b>", parse_mode="HTML")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Chart generation failed: {e}")
+
+# ═══════════════════════════════════════════
+# /alert COMMAND
+# ═══════════════════════════════════════════
+
+@bot.message_handler(commands=["alert"])
+def alert_command(message):
+    ensure_user(message.from_user)
+    parts = message.text.strip().split()
+    if len(parts) != 3:
+        bot.reply_to(message, "⚠️ Usage: /alert BTC 65000")
+        return
+
+    symbol = parts[1].upper()
+    try:
+        target = float(parts[2])
+    except:
+        bot.reply_to(message, "❌ Invalid price value.")
+        return
+
+    data = get_crypto_price(symbol)
+    if not data:
+        bot.reply_to(message, f"❌ Cannot find {symbol}.")
+        return
+
+    direction = "above" if target > data["price"] else "below"
+
+    conn = get_db()
+    conn.execute("INSERT INTO alerts (user_id, symbol, target_price, direction) VALUES (?, ?, ?, ?)",
+                 (message.from_user.id, symbol, target, direction))
+    conn.commit()
+    conn.close()
+
+    emoji = "🔺" if direction == "above" else "🔻"
+    text = f"""
+╔══════════════════════════════════╗
+║  🔔 <b>PRICE ALERT SET</b>              ║
+╠══════════════════════════════════╣
+║  {emoji} {symbol}/USDT
+║  📍 Target: ${target:,.2f}
+║  📊 Current: ${data['price']:,.2f}
+║  ➡️ Direction: {direction.upper()}
+╚══════════════════════════════════╝
+
+✅ You'll be notified when {symbol} goes {direction} ${target:,.2f}
+"""
+    bot.send_message(message.chat.id, text)
+
+# ═══════════════════════════════════════════
+# ALERT CHECKER (Background Job)
+# ═══════════════════════════════════════════
+
+def check_alerts():
+    conn = get_db()
+    alerts = conn.execute("SELECT * FROM alerts WHERE active=1").fetchall()
+    for alert in alerts:
+        data = get_crypto_price(alert["symbol"])
+        if not data:
+            continue
+        triggered = False
+        if alert["direction"] == "above" and data["price"] >= alert["target_price"]:
+            triggered = True
+        elif alert["direction"] == "below" and data["price"] <= alert["target_price"]:
+            triggered = True
+
+        if triggered:
+            conn.execute("UPDATE alerts SET active=0 WHERE id=?", (alert["id"],))
+            conn.commit()
+            text = f"""
+🚨🚨🚨 <b>PRICE ALERT TRIGGERED!</b> 🚨🚨🚨
+
+╔══════════════════════════════════╗
+║  💰 {alert['symbol']}/USDT
+║  📍 Target: ${alert['target_price']:,.2f}
+║  📊 Current: ${data['price']:,.4f}
+║  ➡️ {alert['direction'].upper()} target reached!
+╚══════════════════════════════════╝
+"""
+            try:
+                bot.send_message(alert["user_id"], text)
+            except:
+                pass
+    conn.close()
+
+# ═══════════════════════════════════════════
+# /getcoin - EARN ReCOIN
+# ═══════════════════════════════════════════
+
+@bot.message_handler(commands=["getcoin"])
+def getcoin_command(message):
+    ensure_user(message.from_user)
+    uid = message.from_user.id
+
+    if is_premium(uid):
+        bot.reply_to(message, "⭐ Premium users don't need to watch ads!")
+        return
+
+    conn = get_db()
+    today = datetime.now().strftime("%Y-%m-%d")
+    count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM rewarded_ads WHERE user_id=? AND date(watched_at)=?",
+        (uid, today)
+    ).fetchone()["cnt"]
+    conn.close()
+
+    if count >= 10:
+        bot.reply_to(message, "❌ Daily limit reached (10 ads/day). Come back tomorrow!")
+        return
+
+    last_watch = user_states.get(f"last_ad_{uid}", 0)
+    elapsed = time.time() - last_watch
+    if elapsed < 30:
+        remaining = int(30 - elapsed)
+        bot.reply_to(message, f"⏳ Wait {remaining} seconds before next ad.")
+        return
+
+    ads_watched = user_states.get(f"ads_count_{uid}", 0)
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📺 Watch Ad", callback_data=f"watch_ad_{uid}"))
+
+    text = f"""
+╔══════════════════════════════════╗
+║  💰 <b>EARN ReCOIN</b>                  ║
+╠══════════════════════════════════╣
+║                                  ║
+║  📺 Watch 2 ads = 1 ReCOIN      ║
+║  📊 Today's ads: {count}/10           ║
+║  🎯 Progress: {ads_watched % 2}/2 ads watched  ║
+║  💎 Balance: {get_balance(uid):.1f} ReCOIN     ║
+║                                  ║
+╚══════════════════════════════════╝
+"""
+    bot.send_message(message.chat.id, text, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("watch_ad_"))
+def watch_ad_callback(call):
+    uid = call.from_user.id
+    user_states[f"last_ad_{uid}"] = time.time()
+
+    ads_count = user_states.get(f"ads_count_{uid}", 0) + 1
+    user_states[f"ads_count_{uid}"] = ads_count
+
+    conn = get_db()
+    conn.execute("INSERT INTO rewarded_ads (user_id, ad_id, verified) VALUES (?, ?, 1)",
+                 (uid, f"ad_{int(time.time())}"))
+    conn.commit()
+    conn.close()
+
+    if ads_count % 2 == 0:
+        add_coins(uid, 1.0)
+        bot.answer_callback_query(call.id, "🎉 +1 ReCOIN earned!")
+        bot.edit_message_text(
+            f"✅ <b>+1 ReCOIN earned!</b>\n💎 Balance: {get_balance(uid):.1f} ReCOIN\n\nUse /getcoin to earn more!",
+            call.message.chat.id, call.message.message_id, parse_mode="HTML"
+        )
+        user_states[f"ads_count_{uid}"] = 0
+    else:
+        bot.answer_callback_query(call.id, "✅ Ad watched! 1 more for ReCOIN.")
+        bot.edit_message_text(
+            f"📺 Ad watched! Watch 1 more ad to earn 1 ReCOIN.\n\nUse /getcoin to continue.",
+            call.message.chat.id, call.message.message_id, parse_mode="HTML"
+        )
+
+# ═══════════════════════════════════════════
+# /balance COMMAND
+# ═══════════════════════════════════════════
+
+@bot.message_handler(commands=["balance"])
+def balance_command(message):
+    ensure_user(message.from_user)
+    uid = message.from_user.id
+    bal = get_balance(uid)
+    prem = "⭐ YES" if is_premium(uid) else "❌ NO"
+
+    text = f"""
+╔══════════════════════════════════╗
+║  💎 <b>YOUR WALLET</b>                  ║
+╠══════════════════════════════════╣
+║                                  ║
+║  💰 ReCOIN Balance: <b>{bal:.1f}</b>
+║  ⭐ Premium: {prem}
+║                                  ║
+╚══════════════════════════════════╝
+"""
+    bot.send_message(message.chat.id, text)
+
+# ═══════════════════════════════════════════
+# /premium COMMAND
+# ═══════════════════════════════════════════
+
+@bot.message_handler(commands=["premium"])
+def premium_command(message):
+    ensure_user(message.from_user)
+
+    if is_premium(message.from_user.id):
+        bot.reply_to(message, "⭐ You already have Premium!")
+        return
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("⭐ 7 Stars - 1 Day", callback_data="prem_stars_7_1"),
+        types.InlineKeyboardButton("⭐ 4 Stars - 7 Days", callback_data="prem_stars_4_7"),
+        types.InlineKeyboardButton("⭐ 1 Star - 30 Days", callback_data="prem_stars_1_30"),
+        types.InlineKeyboardButton("💎 2 ReCOIN - 1 Day", callback_data="prem_coin_2_1"),
+        types.InlineKeyboardButton("💎 14 ReCOIN - 7 Days", callback_data="prem_coin_14_7"),
+        types.InlineKeyboardButton("💎 30 ReCOIN - 30 Days", callback_data="prem_coin_30_30"),
+        types.InlineKeyboardButton("💎 60 ReCOIN - 60 Days", callback_data="prem_coin_60_60"),
     )
 
-@bot.message_handler(content_types=['location'])
-def handle_flight_location(message):
+    text = """
+╔══════════════════════════════════╗
+║  ⭐ <b>PREMIUM SUBSCRIPTION</b>         ║
+╠══════════════════════════════════╣
+║                                  ║
+║  <b>Stars Payment:</b>                 ║
+║  ⭐ 7 Stars → 1 Day              ║
+║  ⭐ 4 Stars → 7 Days             ║
+║  ⭐ 1 Star → 30 Days             ║
+║                                  ║
+║  <b>ReCOIN Payment:</b>                ║
+║  💎 2 ReCOIN → 1 Day             ║
+║  💎 14 ReCOIN → 7 Days           ║
+║  💎 30 ReCOIN → 30 Days          ║
+║  💎 60 ReCOIN → 60 Days          ║
+║                                  ║
+╚══════════════════════════════════╝
+"""
+    bot.send_message(message.chat.id, text, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("prem_coin_"))
+def premium_coin_callback(call):
+    parts = call.data.split("_")
+    cost = int(parts[2])
+    days = int(parts[3])
+    uid = call.from_user.id
+
+    if deduct_coins(uid, cost):
+        set_premium(uid, days)
+        bot.answer_callback_query(call.id, f"🎉 Premium activated for {days} days!")
+        bot.edit_message_text(
+            f"✅ <b>Premium Activated!</b>\n⭐ Duration: {days} days\n💎 Cost: {cost} ReCOIN\n💰 Remaining: {get_balance(uid):.1f} ReCOIN",
+            call.message.chat.id, call.message.message_id, parse_mode="HTML"
+        )
+    else:
+        bot.answer_callback_query(call.id, "❌ Not enough ReCOIN!", show_alert=True)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("prem_stars_"))
+def premium_stars_callback(call):
+    parts = call.data.split("_")
+    stars = int(parts[2])
+    days = int(parts[3])
+
+    try:
+        prices = [types.LabeledPrice(label=f"Premium {days} Days", amount=stars)]
+        bot.send_invoice(
+            call.message.chat.id,
+            title=f"Premium Subscription - {days} Days",
+            description=f"Get premium features for {days} days",
+            invoice_payload=f"premium_{days}_{call.from_user.id}",
+            provider_token="",
+            currency="XTR",
+            prices=prices,
+        )
+    except Exception as e:
+        bot.answer_callback_query(call.id, f"❌ Payment error: {e}", show_alert=True)
+
+@bot.pre_checkout_query_handler(func=lambda q: True)
+def pre_checkout(query):
+    bot.answer_pre_checkout_query(query.id, ok=True)
+
+@bot.message_handler(content_types=["successful_payment"])
+def successful_payment(message):
+    payload = message.successful_payment.invoice_payload
+    parts = payload.split("_")
+    days = int(parts[1])
+    uid = int(parts[2])
+    set_premium(uid, days)
+    bot.send_message(message.chat.id, f"🎉 <b>Payment Successful!</b>\n⭐ Premium activated for {days} days!", parse_mode="HTML")
+
+# ═══════════════════════════════════════════
+# /nearby_flight - AEROPLANE TRACKER
+# ═══════════════════════════════════════════
+
+@bot.message_handler(commands=["nearby_flight"])
+def nearby_flight_command(message):
+    ensure_user(message.from_user)
+
+    markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    markup.add(types.KeyboardButton("📍 Share Location", request_location=True))
+
+    bot.send_message(message.chat.id, """
+╔══════════════════════════════════╗
+║  ✈️ <b>AEROPLANE TRACKER</b>            ║
+╠══════════════════════════════════╣
+║                                  ║
+║  📍 Share your location to find  ║
+║  nearby flights!                 ║
+║                                  ║
+╚══════════════════════════════════╝
+""", reply_markup=markup)
+
+@bot.message_handler(content_types=["location"])
+def handle_location(message):
+    uid = message.from_user.id
     lat = message.location.latitude
     lon = message.location.longitude
-    markup = types.ReplyKeyboardRemove()
-    bot.send_message(message.chat.id, "📍 Location received! Now select range.", reply_markup=markup)
-    if not hasattr(bot, 'temp_flight_data'):
-        bot.temp_flight_data = {}
-    bot.temp_flight_data[message.from_user.id] = {'lat': lat, 'lon': lon}
-    ranges = [700, 20000, 60000, 140000, 210000, 339000]
+    flight_sessions[uid] = {"lat": lat, "lon": lon}
+
     markup = types.InlineKeyboardMarkup(row_width=2)
-    for r in ranges:
-        km = r // 1000
-        markup.add(types.InlineKeyboardButton(f"{km} km", callback_data=f"flight_range_{r}"))
-    bot.send_message(message.chat.id, "📏 Select search radius:", reply_markup=markup)
+    ranges = [
+        ("700m", 0.7), ("20km", 20), ("37km", 37),
+        ("86km", 86), ("200km", 200), ("339km", 339)
+    ]
+    for label, km in ranges:
+        markup.add(types.InlineKeyboardButton(f"📡 {label}", callback_data=f"range_{km}"))
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('flight_range_'))
-def flight_range_selected(call):
-    range_m = int(call.data.split('_')[2])
-    radius_km = range_m / 1000
-    user_id = call.from_user.id
-    if not hasattr(bot, 'temp_flight_data') or user_id not in bot.temp_flight_data:
-        bot.answer_callback_query(call.id, "❌ Session expired. Please start again.")
+    text = f"""
+╔══════════════════════════════════╗
+║  📍 <b>LOCATION RECEIVED</b>            ║
+╠══════════════════════════════════╣
+║  Lat: {lat:.4f}                  ║
+║  Lon: {lon:.4f}                  ║
+║                                  ║
+║  🎯 Select tracking range:      ║
+╚══════════════════════════════════╝
+"""
+    bot.send_message(message.chat.id, text, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("range_"))
+def range_callback(call):
+    uid = call.from_user.id
+    if uid not in flight_sessions:
+        bot.answer_callback_query(call.id, "❌ Share location first!", show_alert=True)
         return
-    loc = bot.temp_flight_data[user_id]
-    lat, lon = loc['lat'], loc['lon']
-    del bot.temp_flight_data[user_id]
-    flights = get_flights_in_radius(lat, lon, radius_km)
-    msg = format_flight_message(flights, lat, lon, radius_km)
-    sent = bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
-    with flight_tracking_lock:
-        active_flight_tracking[user_id] = {
-            'lat': lat,
-            'lon': lon,
-            'radius_km': radius_km,
-            'chat_id': call.message.chat.id,
-            'message_id': sent.message_id,
-            'start_time': datetime.now(),
-            'expires_at': datetime.now() + timedelta(seconds=FLIGHT_DURATION)
-        }
-    bot.answer_callback_query(call.id, "✅ Tracking started! Updates every 10s.")
-    flight_updater_job()
 
-@bot.message_handler(commands=['stop_tracking'])
-def cmd_stop_tracking(message):
-    with flight_tracking_lock:
-        if message.from_user.id in active_flight_tracking:
-            del active_flight_tracking[message.from_user.id]
-            bot.reply_to(message, "⏹️ Flight tracking stopped.")
-        else:
-            bot.reply_to(message, "❌ No active tracking session.")
+    km = float(call.data.split("_")[1])
+    session = flight_sessions[uid]
+    session["range"] = km
+    session["active"] = True
 
-# =============================================================================
-# WEBHOOK ROUTES
-# =============================================================================
-@app.route(WEBHOOK_URL_PATH, methods=['POST'])
+    bot.answer_callback_query(call.id, f"📡 Tracking {km}km range...")
+
+    msg = bot.edit_message_text("⏳ Scanning for flights...", call.message.chat.id, call.message.message_id)
+
+    def track_flights():
+        count = 0
+        while flight_sessions.get(uid, {}).get("active", False) and count < 6:
+            lat, lon = session["lat"], session["lon"]
+            deg = km / 111.0
+            lamin, lamax = lat - deg, lat + deg
+            lomin, lomax = lon - deg, lon + deg
+
+            try:
+                url = f"https://opensky-network.org/api/states/all?lamin={lamin}&lomin={lomin}&lamax={lamax}&lomax={lomax}"
+                r = requests.get(url, timeout=15)
+                data = r.json()
+                states = data.get("states", []) or []
+
+                flights = []
+                for s in states:
+                    if s[5] is not None and s[6] is not None:
+                        dist = geodesic((lat, lon), (s[6], s[5])).km
+                        if dist <= km:
+                            flights.append({
+                                "callsign": (s[1] or "N/A").strip(),
+                                "country": s[2] or "N/A",
+                                "alt": s[7] or 0,
+                                "vel": (s[9] or 0) * 3.6,
+                                "dist": dist
+                            })
+
+                flights.sort(key=lambda x: x["dist"])
+
+                lines = [
+                    "╔══════════════════════════════════╗",
+                    f"║  ✈️ <b>FLIGHTS ({len(flights)} found)</b>",
+                    "╠══════════════════════════════════╣"
+                ]
+
+                if flights:
+                    for i, f in enumerate(flights[:15], 1):
+                        lines.append(f"║ {i}. ✈️ <b>{f['callsign']}</b>")
+                        lines.append(f"║    🌍 {f['country']} | 📏 {f['dist']:.1f}km")
+                        lines.append(f"║    ⬆️ {f['alt']:.0f}m | 💨 {f['vel']:.0f}km/h")
+                        lines.append("║")
+                else:
+                    lines.append("║  No flights in range.")
+
+                lines.append(f"║  🕐 {datetime.now().strftime('%H:%M:%S')} | ⏱ {count+1}/6")
+                lines.append("╚══════════════════════════════════╝")
+
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("🛑 Stop Tracking", callback_data=f"stop_flight_{uid}"))
+
+                try:
+                    bot.edit_message_text("\n".join(lines), call.message.chat.id, msg.message_id,
+                                         reply_markup=markup, parse_mode="HTML")
+                except:
+                    pass
+            except Exception as e:
+                logger.error(f"Flight tracking error: {e}")
+
+            count += 1
+            time.sleep(10)
+
+        flight_sessions.pop(uid, None)
+        try:
+            bot.edit_message_text("🛑 Flight tracking stopped.", call.message.chat.id, msg.message_id)
+        except:
+            pass
+
+    threading.Thread(target=track_flights, daemon=True).start()
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("stop_flight_"))
+def stop_flight_callback(call):
+    uid = int(call.data.split("_")[2])
+    if uid in flight_sessions:
+        flight_sessions[uid]["active"] = False
+    bot.answer_callback_query(call.id, "🛑 Stopping...")
+
+@bot.callback_query_handler(func=lambda c: c.data == "stop_live")
+def stop_live_callback(call):
+    uid = call.from_user.id
+    live_sessions.pop(uid, None)
+    bot.answer_callback_query(call.id, "🛑 Stopped!")
+
+# ═══════════════════════════════════════════
+# MENU CALLBACKS
+# ═══════════════════════════════════════════
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("menu_"))
+def menu_callback(call):
+    section = call.data.split("_")[1]
+    if section == "crypto":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, """
+📊 <b>Crypto Commands:</b>
+• /btc - Bitcoin price
+• /eth - Ethereum price
+• /doge - Dogecoin price
+• /sol /xrp /bnb /ada /dot /matic /avax
+• /live - Live all crypto prices
+• /price_btc - 7 day BTC chart
+• /alert BTC 65000 - Set price alert
+""")
+    elif section == "flight":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "✈️ Use /nearby_flight to track aeroplanes near you!")
+    elif section == "coin":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "💰 Use /getcoin to earn ReCOIN!\n💎 Use /balance to check your balance.")
+    elif section == "premium":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "⭐ Use /premium to get premium features!")
+
+# ═══════════════════════════════════════════
+# OWNER: AD SYSTEM
+# ═══════════════════════════════════════════
+
+@bot.message_handler(commands=["createad"])
+def createad_command(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Owner only command.")
+        return
+    ad_creation[message.from_user.id] = {"step": "button_text"}
+    bot.send_message(message.chat.id, "📢 <b>Create New Ad</b>\n\nStep 1/4: Enter button text:")
+
+@bot.message_handler(func=lambda m: m.from_user.id in ad_creation and ad_creation[m.from_user.id].get("step") == "button_text")
+def ad_step_button(message):
+    ad_creation[message.from_user.id]["button_text"] = message.text
+    ad_creation[message.from_user.id]["step"] = "link"
+    bot.send_message(message.chat.id, "Step 2/4: Enter ad link (URL):")
+
+@bot.message_handler(func=lambda m: m.from_user.id in ad_creation and ad_creation[m.from_user.id].get("step") == "link")
+def ad_step_link(message):
+    ad_creation[message.from_user.id]["link"] = message.text
+    ad_creation[message.from_user.id]["step"] = "photo"
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⏭ Skip Photo", callback_data="ad_skip_photo"))
+    bot.send_message(message.chat.id, "Step 3/4: Send a photo for the ad or skip:", reply_markup=markup)
+
+@bot.message_handler(content_types=["photo"], func=lambda m: m.from_user.id in ad_creation and ad_creation[m.from_user.id].get("step") == "photo")
+def ad_step_photo(message):
+    ad_creation[message.from_user.id]["photo_id"] = message.photo[-1].file_id
+    ad_creation[message.from_user.id]["step"] = "duration"
+    bot.send_message(message.chat.id, "Step 4/4: Enter duration in hours:")
+
+@bot.callback_query_handler(func=lambda c: c.data == "ad_skip_photo")
+def ad_skip_photo(call):
+    if call.from_user.id in ad_creation:
+        ad_creation[call.from_user.id]["photo_id"] = None
+        ad_creation[call.from_user.id]["step"] = "duration"
+        bot.edit_message_text("Step 4/4: Enter duration in hours:", call.message.chat.id, call.message.message_id)
+
+@bot.message_handler(func=lambda m: m.from_user.id in ad_creation and ad_creation[m.from_user.id].get("step") == "duration")
+def ad_step_duration(message):
+    try:
+        hours = int(message.text)
+    except:
+        bot.reply_to(message, "❌ Enter a valid number.")
+        return
+
+    ad = ad_creation.pop(message.from_user.id)
+    expires = (datetime.now() + timedelta(hours=hours)).isoformat()
+
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO ads (button_text, link, photo_id, duration_hours, expires_at) VALUES (?, ?, ?, ?, ?)",
+        (ad["button_text"], ad["link"], ad.get("photo_id"), hours, expires)
+    )
+    conn.commit()
+    conn.close()
+
+    bot.send_message(message.chat.id, f"""
+✅ <b>Ad Created!</b>
+📝 Button: {ad['button_text']}
+🔗 Link: {ad['link']}
+📷 Photo: {'Yes' if ad.get('photo_id') else 'No'}
+⏰ Duration: {hours} hours
+""")
+
+@bot.message_handler(commands=["manageads"])
+def manageads_command(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Owner only command.")
+        return
+
+    conn = get_db()
+    ads = conn.execute("SELECT * FROM ads WHERE active=1").fetchall()
+    conn.close()
+
+    if not ads:
+        bot.send_message(message.chat.id, "📢 No active ads.")
+        return
+
+    for ad in ads:
+        views = 0
+        conn2 = get_db()
+        v = conn2.execute("SELECT COUNT(*) as cnt FROM ad_views WHERE ad_id=?", (ad["id"],)).fetchone()
+        conn2.close()
+        if v:
+            views = v["cnt"]
+
+        markup = types.InlineKeyboardMarkup(row_width=3)
+        markup.add(
+            types.InlineKeyboardButton("⏱ Extend", callback_data=f"ad_extend_{ad['id']}"),
+            types.InlineKeyboardButton("🛑 Stop", callback_data=f"ad_stop_{ad['id']}"),
+            types.InlineKeyboardButton("🗑 Delete", callback_data=f"ad_delete_{ad['id']}"),
+        )
+
+        text = f"""
+📢 <b>Ad #{ad['id']}</b>
+📝 {ad['button_text']}
+🔗 {ad['link']}
+👁 Views: {views}
+⏰ Expires: {ad['expires_at'][:16]}
+"""
+        bot.send_message(message.chat.id, text, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("ad_extend_"))
+def ad_extend_callback(call):
+    if call.from_user.id != OWNER_ID:
+        return
+    ad_id = int(call.data.split("_")[2])
+    conn = get_db()
+    ad = conn.execute("SELECT * FROM ads WHERE id=?", (ad_id,)).fetchone()
+    if ad:
+        new_expires = (datetime.fromisoformat(ad["expires_at"]) + timedelta(hours=24)).isoformat()
+        conn.execute("UPDATE ads SET expires_at=? WHERE id=?", (new_expires, ad_id))
+        conn.commit()
+        bot.answer_callback_query(call.id, "⏱ Extended by 24 hours!")
+    conn.close()
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("ad_stop_"))
+def ad_stop_callback(call):
+    if call.from_user.id != OWNER_ID:
+        return
+    ad_id = int(call.data.split("_")[2])
+    conn = get_db()
+    conn.execute("UPDATE ads SET active=0 WHERE id=?", (ad_id,))
+    conn.commit()
+    conn.close()
+    bot.answer_callback_query(call.id, "🛑 Ad stopped!")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("ad_delete_"))
+def ad_delete_callback(call):
+    if call.from_user.id != OWNER_ID:
+        return
+    ad_id = int(call.data.split("_")[2])
+    conn = get_db()
+    conn.execute("DELETE FROM ads WHERE id=?", (ad_id,))
+    conn.commit()
+    conn.close()
+    bot.answer_callback_query(call.id, "🗑 Ad deleted!")
+
+# ═══════════════════════════════════════════
+# WHITELIST SYSTEM
+# ═══════════════════════════════════════════
+
+@bot.message_handler(commands=["add_whitelist"])
+def add_whitelist_command(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Owner only command.")
+        return
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(message, "⚠️ Usage: /add_whitelist <chat_id>")
+        return
+    try:
+        chat_id = int(parts[1])
+    except:
+        bot.reply_to(message, "❌ Invalid chat ID.")
+        return
+
+    conn = get_db()
+    conn.execute("INSERT OR REPLACE INTO whitelist (chat_id, title) VALUES (?, ?)", (chat_id, "Manual"))
+    conn.commit()
+    conn.close()
+    bot.reply_to(message, f"✅ Chat {chat_id} added to whitelist.")
+
+@bot.message_handler(commands=["remove_whitelist"])
+def remove_whitelist_command(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Owner only command.")
+        return
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(message, "⚠️ Usage: /remove_whitelist <chat_id>")
+        return
+    try:
+        chat_id = int(parts[1])
+    except:
+        bot.reply_to(message, "❌ Invalid chat ID.")
+        return
+
+    conn = get_db()
+    conn.execute("DELETE FROM whitelist WHERE chat_id=?", (chat_id,))
+    conn.commit()
+    conn.close()
+    bot.reply_to(message, f"✅ Chat {chat_id} removed from whitelist.")
+
+@bot.message_handler(commands=["list_whitelist"])
+def list_whitelist_command(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Owner only command.")
+        return
+
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM whitelist").fetchall()
+    conn.close()
+
+    if not rows:
+        bot.reply_to(message, "📋 Whitelist is empty.")
+        return
+
+    text = "📋 <b>Whitelist:</b>\n\n"
+    for r in rows:
+        text += f"• {r['chat_id']} - {r['title']}\n"
+    bot.send_message(message.chat.id, text)
+
+@bot.message_handler(content_types=["new_chat_members"])
+def on_bot_added(message):
+    for member in message.new_chat_members:
+        if member.id == bot.get_me().id:
+            conn = get_db()
+            row = conn.execute("SELECT * FROM whitelist WHERE chat_id=?", (message.chat.id,)).fetchone()
+            conn.close()
+            if not row:
+                bot.send_message(message.chat.id, "❌ This group is not whitelisted. Leaving...")
+                bot.leave_chat(message.chat.id)
+
+# ═══════════════════════════════════════════
+# EXPIRED AD CLEANUP
+# ═══════════════════════════════════════════
+
+def cleanup_expired_ads():
+    conn = get_db()
+    conn.execute("UPDATE ads SET active=0 WHERE active=1 AND expires_at < ?", (datetime.now().isoformat(),))
+    conn.commit()
+    conn.close()
+
+# ═══════════════════════════════════════════
+# SCHEDULER
+# ═══════════════════════════════════════════
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(check_alerts, "interval", seconds=30)
+scheduler.add_job(cleanup_expired_ads, "interval", minutes=10)
+scheduler.start()
+
+# ═══════════════════════════════════════════
+# FLASK WEBHOOK
+# ═══════════════════════════════════════════
+
+@app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
-    json_str = request.get_data().decode('UTF-8')
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-    return 'OK', 200
+    if request.headers.get("content-type") == "application/json":
+        json_str = request.get_data().decode("utf-8")
+        update = telebot.types.Update.de_json(json_str)
+        bot.process_new_updates([update])
+        return "", 200
+    return "Invalid", 403
 
-@app.route('/')
-def home():
-    return "✅ Bot is running!"
+@app.route("/", methods=["GET"])
+def index():
+    return "🤖 Bot is running!", 200
 
-# =============================================================================
-# BOT STARTUP
-# =============================================================================
-def start_bot():
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "time": datetime.now().isoformat()})
+
+# ═══════════════════════════════════════════
+# SET WEBHOOK & START
+# ═══════════════════════════════════════════
+
+def set_webhook():
     bot.remove_webhook()
-    webhook_url = f"https://mohyan-telegram-bot.onrender.com{WEBHOOK_URL_PATH}"
+    time.sleep(1)
+    webhook_url = f"{RENDER_URL}{WEBHOOK_PATH}"
     bot.set_webhook(url=webhook_url)
-    print(f"✅ Webhook set to {webhook_url}")
+    logger.info(f"Webhook set: {webhook_url}")
 
 if __name__ == "__main__":
-    threading.Thread(target=start_bot, daemon=True).start()
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    set_webhook()
+    app.run(host="0.0.0.0", port=PORT, debug=False)
