@@ -16,6 +16,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
 from telebot import types
 from geopy.distance import geodesic
+# hack link gernet function /genlink
+import uuid
+import time
+import urllib.parse
+import random
 
 # ═══════════════════════════════════════════
 # CONFIGURATION
