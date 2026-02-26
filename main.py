@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+w#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import telebot
@@ -10,18 +10,14 @@ import math
 import requests
 import threading
 from datetime import datetime, timedelta
-
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 BOT_TOKEN = "8616715853:AAGRGBya1TvbSzP2PVDN010-15IK6LVa114"
 OWNER_ID = 6504476778
-
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
-
 WEBHOOK_URL_PATH = "/webhook"
-
 # =============================================================================
 # BASIC COMMAND
 # =============================================================================
@@ -29,7 +25,6 @@ WEBHOOK_URL_PATH = "/webhook"
 def start_command(message):
     """Welcome message"""
     bot.reply_to(message, "✅ Bot is working! Send /help for commands.")
-
 # =============================================================================
 # WEBHOOK ROUTES
 # =============================================================================
@@ -39,11 +34,9 @@ def webhook():
     update = telebot.types.Update.de_json(json_str)
     bot.process_new_updates([update])
     return 'OK', 200
-
 @app.route('/')
 def home():
     return "✅ Bot is running (Basic)!"
-
 # =============================================================================
 # BOT STARTUP
 # =============================================================================
@@ -57,34 +50,22 @@ if __name__ == "__main__":
     threading.Thread(target=start_bot, daemon=True).start()
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
-    
 # =============================================================================
-# AEROPLANE TRACKER – /nearby_flight
+# AEROPLANE TRACKER – /nearby_flight (COMPLETE FUNCTION)
 # =============================================================================
-
-
-# -------------------- CONFIG --------------------
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
-FLIGHT_UPDATE_INTERVAL = 10  # seconds
-FLIGHT_DURATION = 60  # seconds (1 minute)
-
-# Active tracking sessions
+FLIGHT_UPDATE_INTERVAL = 10
+FLIGHT_DURATION = 60
 active_flight_tracking = {}
 flight_tracking_lock = threading.Lock()
-
-# -------------------- HELPER FUNCTIONS --------------------
 def haversine(lat1, lon1, lat2, lon2):
-    """Distance between two lat/lon points in km"""
     R = 6371
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
     c = 2 * math.asin(math.sqrt(a))
     return R * c
-
 def get_flights_in_radius(lat, lon, radius_km):
-    """Fetch flights from OpenSky within given radius"""
-    # Approximate bounding box
     lat_delta = radius_km / 111.0
     lon_delta = radius_km / (111.0 * math.cos(math.radians(lat)))
     params = {
@@ -98,7 +79,7 @@ def get_flights_in_radius(lat, lon, radius_km):
         data = resp.json()
         flights = []
         for state in data.get('states', []):
-            if state[5] and state[6]:  # lon, lat exist
+            if state[5] and state[6]:
                 flight_lon = state[5]
                 flight_lat = state[6]
                 dist = haversine(lat, lon, flight_lat, flight_lon)
@@ -117,14 +98,11 @@ def get_flights_in_radius(lat, lon, radius_km):
     except Exception as e:
         print(f"OpenSky error: {e}")
         return []
-
 def format_flight_message(flights, lat, lon, radius_km):
-    """Create a premium formatted message with flight details"""
     if not flights:
         return f"✈️ *No flights found within {radius_km}km*\n\n_Will keep checking..._"
-
     msg = f"✈️ *Flights within {radius_km}km*\n━━━━━━━━━━━━━━━━━━━━━\n"
-    for f in flights[:5]:  # max 5 to avoid long message
+    for f in flights[:5]:
         msg += f"\n🛩️ *{f['callsign']}*\n"
         msg += f"   📍 Distance: `{f['distance']} km`\n"
         msg += f"   📈 Altitude: `{f['altitude']} m`\n"
@@ -137,10 +115,7 @@ def format_flight_message(flights, lat, lon, radius_km):
     msg += "\n━━━━━━━━━━━━━━━━━━━━━\n"
     msg += f"_Updates every 10s · Auto-stops in 60s_"
     return msg
-
-# -------------------- BACKGROUND UPDATER --------------------
 def flight_updater_job():
-    """Runs every 10 seconds to update active tracking messages"""
     with flight_tracking_lock:
         now = datetime.now()
         expired = []
@@ -148,7 +123,6 @@ def flight_updater_job():
             if now > data['expires_at']:
                 expired.append(user_id)
                 continue
-            # Fetch flights
             flights = get_flights_in_radius(data['lat'], data['lon'], data['radius_km'])
             msg = format_flight_message(flights, data['lat'], data['lon'], data['radius_km'])
             try:
@@ -160,23 +134,15 @@ def flight_updater_job():
                 )
             except Exception as e:
                 print(f"Edit error for {user_id}: {e}")
-        # Remove expired
         for uid in expired:
             del active_flight_tracking[uid]
-
-# Add this job to your scheduler (if you have one)
+# Add this to your scheduler setup (pehle se scheduler hai to ye line add karo)
 # scheduler.add_job(flight_updater_job, 'interval', seconds=FLIGHT_UPDATE_INTERVAL)
-
-# -------------------- BOT COMMAND HANDLERS --------------------
 @bot.message_handler(commands=['nearby_flight'])
 def cmd_nearby_flight(message):
-    """Start flight tracking by sharing location"""
-    # Stop any previous tracking for this user
     with flight_tracking_lock:
         if message.from_user.id in active_flight_tracking:
             del active_flight_tracking[message.from_user.id]
-    
-    # Ask for location with a button
     markup = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
     location_btn = types.KeyboardButton("📍 Share Location", request_location=True)
     markup.add(location_btn)
@@ -186,56 +152,35 @@ def cmd_nearby_flight(message):
         "Or you can use the button below.",
         reply_markup=markup
     )
-
 @bot.message_handler(content_types=['location'])
 def handle_flight_location(message):
-    """Receive location and ask for range"""
     lat = message.location.latitude
     lon = message.location.longitude
-    
-    # Remove the location keyboard
     markup = types.ReplyKeyboardRemove()
     bot.send_message(message.chat.id, "📍 Location received! Now select range.", reply_markup=markup)
-    
-    # Store location temporarily in user_data (or use next step)
-    # We'll use a simple dict
     if not hasattr(bot, 'temp_flight_data'):
         bot.temp_flight_data = {}
     bot.temp_flight_data[message.from_user.id] = {'lat': lat, 'lon': lon}
-    
-    # Range selection buttons
-    ranges = [700, 20000, 60000, 140000, 210000, 339000]  # meters
+    ranges = [700, 20000, 60000, 140000, 210000, 339000]
     markup = types.InlineKeyboardMarkup(row_width=2)
     for r in ranges:
         km = r // 1000
         markup.add(types.InlineKeyboardButton(f"{km} km", callback_data=f"flight_range_{r}"))
     bot.send_message(message.chat.id, "📏 Select search radius:", reply_markup=markup)
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith('flight_range_'))
 def flight_range_selected(call):
-    """Start tracking after range selection"""
     range_m = int(call.data.split('_')[2])
     radius_km = range_m / 1000
     user_id = call.from_user.id
-    
-    # Get stored location
     if not hasattr(bot, 'temp_flight_data') or user_id not in bot.temp_flight_data:
         bot.answer_callback_query(call.id, "❌ Session expired. Please start again.")
         return
     loc = bot.temp_flight_data[user_id]
     lat, lon = loc['lat'], loc['lon']
-    
-    # Clean up temp data
     del bot.temp_flight_data[user_id]
-    
-    # Fetch initial flights
     flights = get_flights_in_radius(lat, lon, radius_km)
     msg = format_flight_message(flights, lat, lon, radius_km)
-    
-    # Send initial message
     sent = bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
-    
-    # Store tracking session
     with flight_tracking_lock:
         active_flight_tracking[user_id] = {
             'lat': lat,
@@ -246,15 +191,10 @@ def flight_range_selected(call):
             'start_time': datetime.now(),
             'expires_at': datetime.now() + timedelta(seconds=FLIGHT_DURATION)
         }
-    
     bot.answer_callback_query(call.id, "✅ Tracking started! Updates every 10s.")
-    
-    # Immediately run the updater once
-    flight_updater_job()
-
+    flight_updater_job()s
 @bot.message_handler(commands=['stop_tracking'])
 def cmd_stop_tracking(message):
-    """Manually stop flight tracking"""
     with flight_tracking_lock:
         if message.from_user.id in active_flight_tracking:
             del active_flight_tracking[message.from_user.id]
