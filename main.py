@@ -810,7 +810,15 @@ def verify_ad(call):
             c.execute("UPDATE user_coins SET ad_view_count=? WHERE user_id=?", (vc, uid))
             bot.answer_callback_query(call.id, f"✅ Verified! {2-(vc%2)} more to earn 1 ReCOIN")
         conn.commit()
+# My Edit version for webhook manually work
+# ==================== FLASK ROUTES ====================
+@app.route('/')
+def home():
+    return "✅ Bot is running!"
 
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    # ... existing code of manually work...
 # =============================================================================
 # OWNER ADS MANAGEMENT
 # =============================================================================
