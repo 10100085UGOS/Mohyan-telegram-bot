@@ -192,7 +192,7 @@ def flight_range_selected(call):
             'expires_at': datetime.now() + timedelta(seconds=FLIGHT_DURATION)
         }
     bot.answer_callback_query(call.id, "✅ Tracking started! Updates every 10s.")
-    flight_updater_job()s
+    flight_updater_job()
 @bot.message_handler(commands=['stop_tracking'])
 def cmd_stop_tracking(message):
     with flight_tracking_lock:
