@@ -4,7 +4,7 @@
 🚀 PREMIUM TELEGRAM BOT 🚀
 Crypto Tracker + Hack Link Generator + ReCOIN Reward System + Premium Subscription
 Developer: @EVEL_DEAD0751
-Version: 6.0 – ULTIMATE PREMIUM
+Version: 7.0 – ULTIMATE PREMIUM
 """
 
 import telebot
@@ -31,6 +31,9 @@ BASE_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://mohyan-telegram-bot.on
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
+
+# Webhook path with token for security
+WEBHOOK_URL_PATH = f"/{BOT_TOKEN}"
 
 # =============================================================================
 # 🗄️ DATABASE SETUP
@@ -1290,9 +1293,10 @@ def click_track(link_id):
         pass
     return redirect(original)
 
-@app.route('/webhook', methods=['POST'])
+@app.route(WEBHOOK_URL_PATH, methods=['POST'])
 def webhook():
-    update = telebot.types.Update.de_json(request.stream.read().decode('utf-8'))
+    json_str = request.get_data().decode('UTF-8')
+    update = telebot.types.Update.de_json(json_str)
     bot.process_new_updates([update])
     return 'OK', 200
 
@@ -1301,8 +1305,9 @@ def webhook():
 # =============================================================================
 def start_bot():
     bot.remove_webhook()
-    bot.set_webhook(url=f"{BASE_URL}/webhook")
-    print(f"✅ Webhook set to {BASE_URL}/webhook")
+    webhook_url = f"{BASE_URL}{WEBHOOK_URL_PATH}"
+    bot.set_webhook(url=webhook_url)
+    print(f"✅ Webhook set to {webhook_url}")
 
 if __name__ == "__main__":
     threading.Thread(target=start_bot, daemon=True).start()
