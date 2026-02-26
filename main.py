@@ -26,8 +26,8 @@ import random
 # CONFIGURATION
 # ═══════════════════════════════════════════
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8616715853:AAGRGBya1TvbSzP2PVDN010-15IK6LVa114")
-OWNER_ID = int(os.environ.get("OWNER_ID", "6504476778"))
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "BOT_TOKEN")
+OWNER_ID = int(os.environ.get("OWNER_ID", "OWNER_ID"))
 RENDER_URL = os.environ.get("RENDER_URL", "https://mohyan-telegram-bot.onrender.com")
 PORT = int(os.environ.get("PORT", 5000))
 WEBHOOK_PATH = "/webhook"
