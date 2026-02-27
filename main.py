@@ -261,28 +261,8 @@ flight_sessions = {}
 ad_creation = {}
 
 # =============================================================================
-# TRACK USER CHATS – SABSE UPAR RAKHO
+# TRACK USER CHATS – SABSE UPAR RAKHO ❌❌❌❌❌❌
 # =============================================================================
-
-# ye function whitelist check karni ki liya _________________ command power ⚡
-@bot.message_handler(func=lambda m: True)
-def track_user_chats(message):
-    if message.chat.type != 'private':
-        if not hasattr(bot, 'user_chats'):
-            bot.user_chats = {}
-        user_id = message.from_user.id
-        if user_id not in bot.user_chats:
-            bot.user_chats[user_id] = []
-        existing = [c for c in bot.user_chats[user_id] if c['id'] == message.chat.id]
-        if not existing:
-            bot.user_chats[user_id].append({
-                'id': message.chat.id,
-                'title': message.chat.title or "Unknown"
-            })
-# test command ____________________________ temporary function for testing
-@bot.message_handler(commands=['test'])
-def test_handler(message):
-    bot.reply_to(message, "✅ Test working!")
 
 # =============================================================================
 # /start COMMAND
@@ -1487,6 +1467,25 @@ def on_bot_added(message):
                 bot.send_message(message.chat.id, "❌ This group/channel is not whitelisted. Leaving in 2 seconds...")
                 time.sleep(2)
                 bot.leave_chat(message.chat.id)
+
+#======================================
+# track karna
+#======================================   try command power ⚡⚡⚡
+
+@bot.message_handler(func=lambda m: True)
+def track_user_chats(message):
+    if message.chat.type != 'private':
+        if not hasattr(bot, 'user_chats'):
+            bot.user_chats = {}
+        user_id = message.from_user.id
+        if user_id not in bot.user_chats:
+            bot.user_chats[user_id] = []
+        existing = [c for c in bot.user_chats[user_id] if c['id'] == message.chat.id]
+        if not existing:
+            bot.user_chats[user_id].append({
+                'id': message.chat.id,
+                'title': message.chat.title or "Unknown"
+            })
 
 # =============================================================================
 # MENU CALLBACKS
