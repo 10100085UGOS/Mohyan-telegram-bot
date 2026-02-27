@@ -263,10 +263,6 @@ ad_creation = {}
 # =============================================================================
 # TRACK USER CHATS – SABSE UPAR RAKHO
 # =============================================================================
-# test command ____________________________ temporary function for testing
-@bot.message_handler(commands=['test'])
-def test_handler(message):
-    bot.reply_to(message, "✅ Test working!")
 
 # ye function whitelist check karni ki liya _________________ command power ⚡
 @bot.message_handler(func=lambda m: True)
@@ -283,6 +279,11 @@ def track_user_chats(message):
                 'id': message.chat.id,
                 'title': message.chat.title or "Unknown"
             })
+# test command ____________________________ temporary function for testing
+@bot.message_handler(commands=['test'])
+def test_handler(message):
+    bot.reply_to(message, "✅ Test working!")
+
 # =============================================================================
 # /start COMMAND
 # =============================================================================
