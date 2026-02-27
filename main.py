@@ -1547,11 +1547,13 @@ def remove_confirm_no(call):
     bot.edit_message_text("❌ Removal cancelled.", call.message.chat.id, call.message.message_id)
     user_states.pop(f"remove_{call.from_user.id}", None)
         elif alert["direction"] == "below" and data["price"] <= alert["target_price"]:
-            triggered = True
+    triggered = True
         if triggered:
-            conn.execute("UPDATE alerts SET active=0 WHERE id=?", (alert["id"],))
-            conn.commit()
-            text = f"""
+    conn.execute("UPDATE alerts SET active=0 WHERE id=?", (alert["id"],))
+    conn.commit()
+    text = f"🚨 *PRICE ALERT TRIGGERED!*\n\n💰 {alert['symbol']}/USDT\n📍 Target: ${alert['target_price']:,.2f}\n📊 Current: ${data['price']:,.4f}\n➡️ {alert['direction'].upper()} target reached!"
+    try:
+        bot.send_message(alert["user_id"], text, parse_mode="Markdown")
 🚨🚨🚨 <b>PRICE ALERT TRIGGERED!</b> 🚨🚨🚨
 
 ╔══════════════════════════════════╗
