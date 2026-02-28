@@ -1,3 +1,4 @@
+print("🔥 informationcracker.py LOADED")
 import time
 import uuid
 from datetime import datetime
