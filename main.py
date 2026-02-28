@@ -32,7 +32,7 @@ from geopy.distance import geodesic
 # CONFIGURATION
 # =============================================================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "BOT_TOKEN")
-OWNER_ID = int(os.environ.get("OWNER_ID", "OWNER_ID"))
+OWNER_ID = int(os.environ.get("OWNER_ID", "6504476778"))
 RENDER_URL = os.environ.get("RENDER_URL", "https://mohyan-telegram-bot.onrender.com")
 PORT = int(os.environ.get("PORT", 5000))
 WEBHOOK_PATH = "/webhook"
