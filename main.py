@@ -17,7 +17,7 @@ import urllib.parse
 import random
 from datetime import datetime, timedelta
 from utils import helpers # update
-helpers.set_owner_id(OWNER_ID) # update
+helpers.set_owner_id(6504476778) # update
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
