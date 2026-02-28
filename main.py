@@ -1726,6 +1726,8 @@ def set_webhook():
     webhook_url = f"{RENDER_URL}{WEBHOOK_PATH}"
     bot.set_webhook(url=webhook_url)
     logger.info(f"Webhook set: {webhook_url}")
+    
+from handlers import informationcracker
 
 if __name__ == "__main__":
     set_webhook()
