@@ -15,6 +15,12 @@ from main import get_db, ensure_user, is_premium, OWNER_ID, RENDER_URL
 
 @bot.message_handler(commands=['genlink', 'terminal:gernatLINK'])
 def genlink_command(message):
+    print("🔥 genlink_command CALLED")
+    bot.reply_to(message, "✅ Test reply")
+    return  # temporary
+    w
+@bot.message_handler(commands=['genlink', 'terminal:gernatLINK'])
+def genlink_command(message):
     ensure_user(message.from_user)
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("💀 ENTER VIDEO LINK", callback_data="genlink_enter"))
