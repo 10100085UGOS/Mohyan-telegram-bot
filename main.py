@@ -990,9 +990,23 @@ def range_callback(call):
     threading.Thread(target=track_flights, daemon=True).start()
 
 # =============================================================================
-# HACK LINK GENERATOR – /genlink & /terminal:gernatLINK
+# STOP HANDLERS
 # =============================================================================
+@bot.callback_query_handler(func=lambda c: c.data == "stop_live")
+def stop_live_callback(call):
+    uid = call.from_user.id
+    if uid in live_sessions:
+        live_sessions[uid] = False
+    bot.answer_callback_query(call.id, "Live updates stopped.")
+    bot.edit_message_text("🛑 Live updates stopped.", call.message.chat.id, call.message.message_id)
 
+@bot.callback_query_handler(func=lambda c: c.data == "stop_flight")
+def stop_flight_callback(call):
+    uid = call.from_user.id
+    if uid in flight_sessions:
+        flight_sessions[uid]["active"] = False
+    bot.answer_callback_query(call.id, "Flight tracking stopped.")
+    bot.edit_message_text("🛑 Flight tracking stopped.", call.message.chat.id, call.message.message_id)
 
 # =============================================================================
 # OWNER ADS MANAGEMENT
