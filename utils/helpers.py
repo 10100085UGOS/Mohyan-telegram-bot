@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from .database import get_db
 
-OWNER_ID = OWNER_ID
+OWNER_ID = 6504476778
 
 def set_owner_id(oid):
     global OWNER_ID
