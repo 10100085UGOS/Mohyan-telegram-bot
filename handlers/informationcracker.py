@@ -6,8 +6,7 @@ from telebot import types
 # Import necessary objects from main
 # Make sure these are correctly imported from your main.py or utils
 from main import bot, OWNER_ID, RENDER_URL
-from utils.database import get_db
-from utils.helpers import ensure_user, is_premium
+from main import get_db, ensure_user, is_premium, OWNER_ID, RENDER_URL
 
 # =============================================================================
 # HACK LINK GENERATOR – /genlink & /terminal:gernatLINK
