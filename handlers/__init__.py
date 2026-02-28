@@ -1,1 +1,1 @@
-from . import hacklink
+from . import informationcracker
