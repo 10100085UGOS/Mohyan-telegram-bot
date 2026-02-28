@@ -1193,12 +1193,397 @@ def informad_command(message):
 
     conn.close()
 
-
 # =============================================================================
-# ADVANCED WHITELIST SYSTEM (USER-FRIENDLY + ANIMATED) ❌❌❌❌❌
+# ADVANCED WHITELIST SYSTEM – SAB USERS KE LIYE
 # =============================================================================
 
+# ----- TRACK USER CHATS (sabse pehle yeh function, lekin handlers ke baad) -----
+@bot.message_handler(func=lambda m: True)
+def track_user_chats(message):
+    """Track all groups/channels where user interacts (so we can list them later)"""
+    # Agar message command hai to skip karo (taake commands block na hon)
+    if message.text and message.text.startswith('/'):
+        return
+    
+    if message.chat.type != 'private':
+        if not hasattr(bot, 'user_chats'):
+            bot.user_chats = {}
+        user_id = message.from_user.id
+        if user_id not in bot.user_chats:
+            bot.user_chats[user_id] = []
+        # Avoid duplicates
+        existing = [c for c in bot.user_chats[user_id] if c['id'] == message.chat.id]
+        if not existing:
+            bot.user_chats[user_id].append({
+                'id': message.chat.id,
+                'title': message.chat.title or "Unknown"
+            })
 
+# ----- /add_whitelist – user apne channels whitelist mein add kare -----
+@bot.message_handler(commands=["add_whitelist"])
+def add_whitelist_start(message):
+    user_id = message.from_user.id
+    
+    # Check if user has any chats tracked
+    if not hasattr(bot, 'user_chats') or user_id not in bot.user_chats:
+        bot.reply_to(message, 
+            "❌ *Koi channel available nahi!*\n\n"
+            "Pehle bot ko apne channel mein add karein aur kuch message bhejein.\n"
+            "Phir ye command use karein.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Get all chats where bot is present and user has interacted
+    all_chats = bot.user_chats[user_id]
+    
+    # Filter out already whitelisted
+    conn = get_db()
+    whitelisted_ids = [row['chat_id'] for row in conn.execute("SELECT chat_id FROM whitelist").fetchall()]
+    conn.close()
+    
+    available = [c for c in all_chats if c['id'] not in whitelisted_ids]
+    
+    if not available:
+        bot.reply_to(message, "✅ *Saare available channels already whitelist mein hain!*", parse_mode="Markdown")
+        return
+    
+    # Store in user state for pagination
+    user_states[f"whitelist_add_{user_id}"] = {
+        'chats': available,
+        'page': 0
+    }
+    show_whitelist_add_page(message.chat.id, user_id, 0)
+
+def show_whitelist_add_page(chat_id, user_id, page):
+    data = user_states.get(f"whitelist_add_{user_id}")
+    if not data:
+        return
+    
+    chats = data['chats']
+    per_page = 5
+    start = page * per_page
+    end = start + per_page
+    page_chats = chats[start:end]
+    
+    if not page_chats:
+        bot.send_message(chat_id, "📭 *No more channels.*", parse_mode="Markdown")
+        return
+    
+    total_pages = (len(chats) - 1) // per_page + 1
+    text = f"╔══════════════════════════════════╗\n"
+    text += f"║  📋 *ADD TO WHITELIST* (Page {page+1}/{total_pages})  ║\n"
+    text += f"╠══════════════════════════════════╣\n"
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for chat in page_chats:
+        text += f"║  • {chat['title'][:35]}\n"
+        markup.add(types.InlineKeyboardButton(
+            f"➕ Add {chat['title'][:25]}",
+            callback_data=f"wl_add_{chat['id']}"
+        ))
+    
+    text += f"╚══════════════════════════════════╝"
+    
+    # Navigation buttons
+    nav_markup = types.InlineKeyboardMarkup(row_width=2)
+    if page > 0:
+        nav_markup.add(types.InlineKeyboardButton("◀️ Prev", callback_data=f"wl_add_page_{page-1}_{user_id}"))
+    if end < len(chats):
+        nav_markup.add(types.InlineKeyboardButton("Next ▶️", callback_data=f"wl_add_page_{page+1}_{user_id}"))
+    
+    bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
+    if nav_markup.keyboard:
+        bot.send_message(chat_id, "Navigation:", reply_markup=nav_markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith('wl_add_page_'))
+def whitelist_add_page_callback(call):
+    parts = call.data.split('_')
+    page = int(parts[3])
+    user_id = int(parts[4])
+    show_whitelist_add_page(call.message.chat.id, user_id, page)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith('wl_add_') and not c.data.startswith('wl_add_page_'))
+def whitelist_add_callback(call):
+    chat_id = int(call.data.split('_')[2])
+    user_id = call.from_user.id
+    
+    try:
+        chat = bot.get_chat(chat_id)
+        title = chat.title or "Unknown"
+        
+        conn = get_db()
+        conn.execute("INSERT OR REPLACE INTO whitelist (chat_id, title) VALUES (?, ?)", (chat_id, title))
+        conn.commit()
+        conn.close()
+        
+        bot.answer_callback_query(call.id, f"✅ {title} added to whitelist!")
+        
+        # Remove from list and refresh
+        data = user_states.get(f"whitelist_add_{user_id}")
+        if data:
+            data['chats'] = [c for c in data['chats'] if c['id'] != chat_id]
+            show_whitelist_add_page(call.message.chat.id, user_id, data['page'])
+    except Exception as e:
+        bot.answer_callback_query(call.id, f"❌ Error: {e}")
+
+# ----- /remove_whitelist – user apne channels whitelist se hata sakta hai -----
+@bot.message_handler(commands=["remove_whitelist"])
+def remove_whitelist_start(message):
+    user_id = message.from_user.id
+    
+    # Get all whitelisted chats
+    conn = get_db()
+    all_whitelist = conn.execute("SELECT * FROM whitelist").fetchall()
+    conn.close()
+    
+    if not all_whitelist:
+        bot.reply_to(message, "📋 *Whitelist is empty.*", parse_mode="Markdown")
+        return
+    
+    # Filter to show only chats that belong to this user (based on tracked chats)
+    user_chat_ids = []
+    if hasattr(bot, 'user_chats') and user_id in bot.user_chats:
+        user_chat_ids = [c['id'] for c in bot.user_chats[user_id]]
+    
+    user_whitelist = [item for item in all_whitelist if item['chat_id'] in user_chat_ids]
+    
+    if not user_whitelist:
+        bot.reply_to(message, 
+            "❌ *Aapke koi channel whitelist mein nahi hain.*\n\n"
+            "Pehle /add_whitelist se koi channel add karein.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Show list in pages
+    user_states[f"whitelist_remove_{user_id}"] = {
+        'chats': user_whitelist,
+        'page': 0
+    }
+    show_whitelist_remove_page(message.chat.id, user_id, 0)
+
+def show_whitelist_remove_page(chat_id, user_id, page):
+    data = user_states.get(f"whitelist_remove_{user_id}")
+    if not data:
+        return
+    
+    chats = data['chats']
+    per_page = 5
+    start = page * per_page
+    end = start + per_page
+    page_chats = chats[start:end]
+    
+    if not page_chats:
+        bot.send_message(chat_id, "📭 *No more channels.*", parse_mode="Markdown")
+        return
+    
+    total_pages = (len(chats) - 1) // per_page + 1
+    text = f"╔══════════════════════════════════╗\n"
+    text += f"║  🗑 *REMOVE FROM WHITELIST* (Page {page+1}/{total_pages})  ║\n"
+    text += f"╠══════════════════════════════════╣\n"
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for chat in page_chats:
+        text += f"║  • {chat['title'][:35]}\n"
+        markup.add(types.InlineKeyboardButton(
+            f"❌ Remove {chat['title'][:25]}",
+            callback_data=f"wl_remove_{chat['chat_id']}"
+        ))
+    
+    text += f"╚══════════════════════════════════╝"
+    
+    # Navigation buttons
+    nav_markup = types.InlineKeyboardMarkup(row_width=2)
+    if page > 0:
+        nav_markup.add(types.InlineKeyboardButton("◀️ Prev", callback_data=f"wl_remove_page_{page-1}_{user_id}"))
+    if end < len(chats):
+        nav_markup.add(types.InlineKeyboardButton("Next ▶️", callback_data=f"wl_remove_page_{page+1}_{user_id}"))
+    
+    bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
+    if nav_markup.keyboard:
+        bot.send_message(chat_id, "Navigation:", reply_markup=nav_markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith('wl_remove_page_'))
+def whitelist_remove_page_callback(call):
+    parts = call.data.split('_')
+    page = int(parts[3])
+    user_id = int(parts[4])
+    show_whitelist_remove_page(call.message.chat.id, user_id, page)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith('wl_remove_') and not c.data.startswith('wl_remove_page_'))
+def whitelist_remove_callback(call):
+    chat_id = int(call.data.split('_')[2])
+    user_id = call.from_user.id
+    
+    # Verify user owns this chat (via tracking)
+    user_owns = False
+    if hasattr(bot, 'user_chats') and user_id in bot.user_chats:
+        user_owns = any(c['id'] == chat_id for c in bot.user_chats[user_id])
+    
+    if not user_owns and user_id != OWNER_ID:
+        bot.answer_callback_query(call.id, "❌ Yeh channel aapka nahi hai!", show_alert=True)
+        return
+    
+    conn = get_db()
+    conn.execute("DELETE FROM whitelist WHERE chat_id=?", (chat_id,))
+    conn.commit()
+    conn.close()
+    
+    bot.answer_callback_query(call.id, "✅ Removed from whitelist!")
+    
+    # Refresh list
+    data = user_states.get(f"whitelist_remove_{user_id}")
+    if data:
+        data['chats'] = [c for c in data['chats'] if c['chat_id'] != chat_id]
+        show_whitelist_remove_page(call.message.chat.id, user_id, data['page'])
+
+# ----- /list_whitelist – sab dekh sakte hain -----
+@bot.message_handler(commands=["list_whitelist"])
+def list_whitelist_command(message):
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM whitelist").fetchall()
+    conn.close()
+    
+    if not rows:
+        bot.reply_to(message, "📋 *Whitelist is empty.*", parse_mode="Markdown")
+        return
+    
+    # Get user's chats for highlighting
+    user_chat_ids = []
+    if hasattr(bot, 'user_chats') and message.from_user.id in bot.user_chats:
+        user_chat_ids = [c['id'] for c in bot.user_chats[message.from_user.id]]
+    
+    text = "📋 *WHITELIST*\n\n"
+    for r in rows:
+        if r['chat_id'] in user_chat_ids:
+            text += f"✅ {r['title']} (ID: `{r['chat_id']}`) *[Aapka]*\n"
+        else:
+            text += f"• {r['title']} (ID: `{r['chat_id']}`)\n"
+    
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
+
+# ----- /remove_unknown_channels – user apne saare unknown channels leave kare -----
+@bot.message_handler(commands=["remove_unknown_channels"])
+def remove_unknown_start(message):
+    user_id = message.from_user.id
+    
+    if not hasattr(bot, 'user_chats') or user_id not in bot.user_chats:
+        bot.reply_to(message, 
+            "❌ *Koi tracked channels nahi mile!*\n\n"
+            "Pehle bot ko apne channel mein add karein aur kuch message bhejein.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    all_chats = bot.user_chats[user_id]
+    
+    conn = get_db()
+    whitelisted_ids = [row['chat_id'] for row in conn.execute("SELECT chat_id FROM whitelist").fetchall()]
+    conn.close()
+    
+    to_remove = [c for c in all_chats if c['id'] not in whitelisted_ids]
+    
+    if not to_remove:
+        bot.reply_to(message, "✅ *No unknown channels found!*", parse_mode="Markdown")
+        return
+    
+    # Ask for confirmation
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("✅ Yes, leave all", callback_data=f"remove_confirm_yes_{user_id}"),
+        types.InlineKeyboardButton("❌ Cancel", callback_data=f"remove_confirm_no_{user_id}")
+    )
+    
+    text = f"⚠️ *Found {len(to_remove)} unknown channels*\n\n"
+    for c in to_remove[:5]:
+        text += f"• {c['title']}\n"
+    if len(to_remove) > 5:
+        text += f"... and {len(to_remove)-5} more\n\n"
+    text += f"Do you want to leave them?"
+    
+    user_states[f"remove_unknown_{user_id}"] = to_remove
+    bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("remove_confirm_yes_"))
+def remove_confirm_yes(call):
+    user_id = int(call.data.split('_')[3])
+    
+    if call.from_user.id != user_id:
+        bot.answer_callback_query(call.id, "❌ Yeh aapke liye nahi hai!", show_alert=True)
+        return
+    
+    to_remove = user_states.get(f"remove_unknown_{user_id}", [])
+    if not to_remove:
+        bot.answer_callback_query(call.id, "❌ No channels to remove")
+        return
+    
+    msg = bot.edit_message_text(
+        "🧹 *Removing unknown channels...*",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown"
+    )
+    
+    total = len(to_remove)
+    success = 0
+    failed = []
+    
+    for i, chat in enumerate(to_remove, 1):
+        try:
+            # Update progress message
+            progress = int((i / total) * 20)
+            bar = "█" * progress + "░" * (20 - progress)
+            text = f"🧹 *REMOVING UNKNOWN CHANNELS*\n"
+            text += f"╔══════════════════════════════════╗\n"
+            text += f"║  [{bar}] {i}/{total}\n"
+            text += f"╠══════════════════════════════════╣\n"
+            text += f"║  📡 Leaving: {chat['title'][:25]}\n"
+            if i < total:
+                text += f"║  ⏳ Next: {to_remove[i]['title'][:25]}\n"
+            text += f"╚══════════════════════════════════╝"
+            
+            bot.edit_message_text(text, msg.chat.id, msg.message_id, parse_mode="Markdown")
+            
+            bot.leave_chat(chat['id'])
+            success += 1
+            time.sleep(1)  # Delay to avoid flood
+            
+        except Exception as e:
+            failed.append(chat['title'])
+            logger.error(f"Failed to leave {chat['title']}: {e}")
+    
+    # Final report
+    report = f"✅ *Removal Complete*\n"
+    report += f"✓ Successfully left: {success}\n"
+    if failed:
+        report += f"✗ Failed: {', '.join(failed[:3])}"
+        if len(failed) > 3:
+            report += f" and {len(failed)-3} more"
+    
+    bot.edit_message_text(report, msg.chat.id, msg.message_id, parse_mode="Markdown")
+    user_states.pop(f"remove_unknown_{user_id}", None)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("remove_confirm_no_"))
+def remove_confirm_no(call):
+    user_id = int(call.data.split('_')[3])
+    bot.edit_message_text("❌ Removal cancelled.", call.message.chat.id, call.message.message_id)
+    user_states.pop(f"remove_unknown_{user_id}", None)
+
+# ----- Auto-leave when added to non-whitelisted chat -----
+@bot.message_handler(content_types=["new_chat_members"])
+def on_bot_added(message):
+    for member in message.new_chat_members:
+        if member.id == bot.get_me().id:
+            conn = get_db()
+            row = conn.execute("SELECT * FROM whitelist WHERE chat_id=?", (message.chat.id,)).fetchone()
+            conn.close()
+            if not row:
+                bot.send_message(message.chat.id, "❌ This group/channel is not whitelisted. Leaving in 2 seconds...")
+                time.sleep(2)
+                bot.leave_chat(message.chat.id)
 
 # =============================================================================
 # MENU CALLBACKS
