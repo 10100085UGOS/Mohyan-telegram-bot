@@ -1,3 +1,5 @@
+import sys
+print("🔥 Python path:", sys.path)
 print("🔥 informationcracker.py LOADED")
 from main import bot, RENDER_URL
 from utils.database import get_db
