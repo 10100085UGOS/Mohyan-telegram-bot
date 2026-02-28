@@ -26,6 +26,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
 from telebot import types
 from geopy.distance import geodesic
+from handlers import informationcracker #________________________________ informationcracker.py (📁) 
 
 # =============================================================================
 # CONFIGURATION
