@@ -1,1 +1,1 @@
-
+from . import hacklink
