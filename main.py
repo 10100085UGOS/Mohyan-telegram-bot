@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-from utils import database, helpers
-helpers.set_owner_id(OWNER_ID)
-from handlers import informationcracker
+
 # =============================================================================
 # IMPORTS
 # =============================================================================
