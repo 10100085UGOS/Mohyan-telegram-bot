@@ -1,9 +1,11 @@
 print("🔥 informationcracker.py LOADED")
+from main import bot, RENDER_URL
+from utils.database import get_db
+from utils.helpers import ensure_user, is_premium
 import time
 import uuid
 from datetime import datetime
 from telebot import types
-
 # Import necessary objects from main
 # Make sure these are correctly imported from your main.py or utils
 from main import bot, OWNER_ID, RENDER_URL
