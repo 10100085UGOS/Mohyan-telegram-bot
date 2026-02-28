@@ -40,7 +40,8 @@ def genlink_command(message):
 👇 Click button and paste your video link
     """
     bot.reply_to(message, danger_text, reply_markup=markup, parse_mode="Markdown")
-
+    
+    bot.register_next_step_handler(call.message, genlink_process_link)
 @bot.callback_query_handler(func=lambda c: c.data == "genlink_enter")
 def genlink_ask_link(call):
     bot.edit_message_text(
