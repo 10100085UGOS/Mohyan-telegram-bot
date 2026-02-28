@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
+from utils import database, helpers
+helpers.set_owner_id(OWNER_ID)
+from handlers import informationcracker
 # =============================================================================
 # IMPORTS
 # =============================================================================
@@ -16,8 +18,6 @@ import uuid
 import urllib.parse
 import random
 from datetime import datetime, timedelta
-from utils import helpers # update
-helpers.set_owner_id(6504476778) # update
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -1856,8 +1856,6 @@ def set_webhook():
     bot.set_webhook(url=webhook_url)
     logger.info(f"Webhook set: {webhook_url}")
     
-from handlers import informationcracker
-
 if __name__ == "__main__":
     set_webhook()
     app.run(host="0.0.0.0", port=PORT, debug=False)
