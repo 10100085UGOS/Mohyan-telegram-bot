@@ -133,8 +133,8 @@ def init_db():
     """)
     try:
         c.execute("ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0")
-except:
-    pass  # Agar column already exist karta hai to ignore karo
+    except:
+        pass  # Agar column already exist karta hai to ignore karo
     
     conn.commit()
     conn.close()
