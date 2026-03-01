@@ -2245,6 +2245,38 @@ scheduler.add_job(cleanup_expired_ads, "interval", minutes=10)
 scheduler.start()
 
 # =============================================================================
+# DEBUG COMMANDS - Remove after testing
+# =============================================================================
+@bot.message_handler(commands=['ping'])
+def ping(message):
+    bot.reply_to(message, "pong")
+
+@bot.message_handler(commands=['debug'])
+def debug_info(message):
+    text = f"Your ID: {message.from_user.id}\n"
+    text += f"Owner ID: {OWNER_ID}\n"
+    text += f"Is Owner: {message.from_user.id == OWNER_ID}\n"
+    text += f"Bot: {bot.get_me().first_name}"
+    bot.reply_to(message, text)
+
+@bot.message_handler(commands=['givecoinid'])
+def givecoinid_command(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Owner only")
+        return
+    try:
+        parts = message.text.split()
+        if len(parts) != 3:
+            bot.reply_to(message, "Usage: /givecoinid user_id amount")
+            return
+        user_id = int(parts[1])
+        amount = float(parts[2])
+        add_coins(user_id, amount)
+        bot.reply_to(message, f"✅ {amount} ReCOIN given to user {user_id}")
+    except Exception as e:
+        bot.reply_to(message, f"Error: {e}")
+
+# =============================================================================
 # SET WEBHOOK & START
 # =============================================================================
 def set_webhook():
