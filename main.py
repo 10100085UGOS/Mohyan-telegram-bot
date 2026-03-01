@@ -1240,6 +1240,7 @@ def track_user_chats(message):
 # ----- /add_whitelist – user apne channels whitelist mein add kare -----
 @bot.message_handler(commands=["add_whitelist"])
 def add_whitelist_start(message):
+    logger.info(f"add_whitelist called by {message.from_user.id}")
     user_id = message.from_user.id
     
     # Check if user has any chats tracked
@@ -1349,6 +1350,7 @@ def whitelist_add_callback(call):
 # ----- /remove_whitelist – user apne channels whitelist se hata sakta hai -----
 @bot.message_handler(commands=["remove_whitelist"])
 def remove_whitelist_start(message):
+    logger.info(f"remove_whitelist called by {message.from_user.id}")
     user_id = message.from_user.id
     
     # Get all whitelisted chats
@@ -1461,6 +1463,7 @@ def whitelist_remove_callback(call):
 # ----- /list_whitelist – sab dekh sakte hain -----
 @bot.message_handler(commands=["list_whitelist"])
 def list_whitelist_command(message):
+    logger.info(f"list_whitelist called by {message.from_user.id}")
     conn = get_db()
     rows = conn.execute("SELECT * FROM whitelist").fetchall()
     conn.close()
@@ -1486,6 +1489,7 @@ def list_whitelist_command(message):
 # ----- /remove_unknown_channels – user apne saare unknown channels leave kare -----
 @bot.message_handler(commands=["remove_unknown_channels"])
 def remove_unknown_start(message):
+    logger.info(f"remove_unknown_channels called by {message.from_user.id}")
     user_id = message.from_user.id
     
     if not hasattr(bot, 'user_chats') or user_id not in bot.user_chats:
@@ -1644,6 +1648,7 @@ def is_owner(user_id):
 # Command: /givecoin @username amount
 @bot.message_handler(commands=['givecoin'])
 def givecoin_command(message):
+    logger.info(f"givecoin called by {message.from_user.id}")
     if not is_owner(message.from_user.id):
         bot.reply_to(message, "❌ Yeh sirf owner ke liye hai.")
         return
@@ -1671,6 +1676,7 @@ def givecoin_command(message):
 # Command: /removecoin @username amount
 @bot.message_handler(commands=['removecoin'])
 def removecoin_command(message):
+    logger.info(f"removecoin called by {message.from_user.id}")
     if not is_owner(message.from_user.id):
         return
     
@@ -1698,6 +1704,7 @@ def removecoin_command(message):
 # Command: /setpremium @username days
 @bot.message_handler(commands=['setpremium'])
 def setpremium_command(message):
+    logger.info(f"setpremium called by {message.from_user.id}")
     if not is_owner(message.from_user.id):
         return
     
@@ -1724,6 +1731,7 @@ def setpremium_command(message):
 # Command: /removepremium @username
 @bot.message_handler(commands=['removepremium'])
 def removepremium_command(message):
+    logger.info(f"removepremium called by {message.from_user.id}")
     if not is_owner(message.from_user.id):
         return
     
@@ -1750,6 +1758,7 @@ def removepremium_command(message):
 # Command: /block @username
 @bot.message_handler(commands=['block'])
 def block_user(message):
+    logger.info(f"block called by {message.from_user.id}")
     if not is_owner(message.from_user.id):
         return
     
@@ -1782,6 +1791,7 @@ def block_user(message):
 # Command: /unblock @username
 @bot.message_handler(commands=['unblock'])
 def unblock_user(message):
+    logger.info(f"unblock called by {message.from_user.id}")
     if not is_owner(message.from_user.id):
         return
     
@@ -1818,6 +1828,7 @@ def unban_user(message):
 # Command: /broadcast message
 @bot.message_handler(commands=['broadcast'])
 def broadcast_command(message):
+    logger.info(f"broadcast called by {message.from_user.id}")
     if not is_owner(message.from_user.id):
         return
     
@@ -1845,6 +1856,7 @@ def broadcast_command(message):
 # Command: /stats
 @bot.message_handler(commands=['stats'])
 def stats_command(message):
+    logger.info(f"stats called by {message.from_user.id}")
     if not is_owner(message.from_user.id):
         return
     
@@ -1872,6 +1884,7 @@ def stats_command(message):
 # Command: /userinfo @username
 @bot.message_handler(commands=['userinfo'])
 def userinfo_command(message):
+    logger.info(f"userinfo called by {message.from_user.id}")
     if not is_owner(message.from_user.id):
         return
     
@@ -1917,6 +1930,7 @@ def userinfo_command(message):
 # Command: /resetuser @username
 @bot.message_handler(commands=['resetuser'])
 def resetuser_command(message):
+    logger.info(f"resetuser called by {message.from_user.id}")
     if not is_owner(message.from_user.id):
         return
     
@@ -1952,6 +1966,7 @@ def resetuser_command(message):
 # Owner panel with inline buttons
 @bot.message_handler(commands=['ownerpanel'])
 def owner_panel(message):
+    logger.info(f"ownerpanel called by {message.from_user.id}")
     if not is_owner(message.from_user.id):
         return
     
@@ -2292,4 +2307,4 @@ def set_webhook():
 
 if __name__ == "__main__":
     set_webhook()
-    app.run(host="0.0.0.0", port=PORT, debug=False)
+    app.run(host="0.0.0.0", port=PORT, debug=False)a
