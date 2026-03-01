@@ -1888,7 +1888,13 @@ def set_webhook():
     webhook_url = f"{RENDER_URL}{WEBHOOK_PATH}"
     bot.set_webhook(url=webhook_url)
     logger.info(f"Webhook set: {webhook_url}")
-    
+
+# =============================================================================
+# IMPORT OWNER CONTROLS
+# =============================================================================
+import owner_controls
+
+# webhook connect system____________ backbone internal connection
 if __name__ == "__main__":
     set_webhook()
     app.run(host="0.0.0.0", port=PORT, debug=False)
